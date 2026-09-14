@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=General POS
+Comment=Offline-first General POS for retail businesses
+Exec="/opt/general-pos/bin/General POS"
+Icon=/opt/general-pos/lib/General_POS.png
+Terminal=false
+Type=Application
+Categories=Office
+MimeType=

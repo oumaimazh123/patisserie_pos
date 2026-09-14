@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PATISSERIE_POS
+GenericName=Point of Sale
+Comment=Système de caisse enregistreuse pour Pâtisserie
+Exec="/home/zakaria/patisserie_pos_retail/opt/patisserie-pos/bin/PATISSERIE_POS"
+Icon=/home/zakaria/patisserie_pos_retail/opt/patisserie-pos/lib/PATISSERIE_POS.png
+Terminal=false
+Categories=Office;
+StartupNotify=true
+StartupWMClass=PATISSERIE_POS
+

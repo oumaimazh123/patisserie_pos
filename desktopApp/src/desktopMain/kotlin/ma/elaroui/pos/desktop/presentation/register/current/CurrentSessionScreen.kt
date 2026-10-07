@@ -73,7 +73,12 @@ fun CurrentSessionScreen(
                 .fillMaxSize()
                 .background(PosColors.Canvas)
         ) {
-            ManagementPageHeader(strings.currentSessionTitle, strings, onBack)
+            ManagementPageHeader(
+                title = strings.currentSessionTitle,
+                strings = strings,
+                onBackToDashboard = onBack,
+                backLabel = strings.back
+            )
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -106,7 +111,8 @@ fun CurrentSessionScreen(
         ManagementPageHeader(
             title = strings.currentSessionTitle,
             strings = strings,
-            onBackToDashboard = onBack
+            onBackToDashboard = onBack,
+            backLabel = strings.back
         ) {
             // Action Buttons in Header
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

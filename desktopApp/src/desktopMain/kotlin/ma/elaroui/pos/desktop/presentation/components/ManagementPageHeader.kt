@@ -33,6 +33,7 @@ fun ManagementPageHeader(
     title: String,
     strings: DesktopStrings,
     onBackToDashboard: (() -> Unit)?,
+    backLabel: String = strings.backToDashboard,
     actions: @Composable RowScope.() -> Unit = {}
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth().height(AppHeaderHeight)) {
@@ -50,7 +51,7 @@ fun ManagementPageHeader(
             ) {
                 if (onBackToDashboard != null) {
                     BackArrowButton(
-                        contentDescription = strings.backToDashboard,
+                        contentDescription = backLabel,
                         onClick = onBackToDashboard
                     )
                 }

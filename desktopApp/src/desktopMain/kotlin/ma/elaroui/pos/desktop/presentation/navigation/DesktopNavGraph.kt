@@ -1366,7 +1366,7 @@ private fun DesktopShell(
                         canCloseRegister = state.currentUser != null,
                         onCashMovementSubmitted = { t, a, r -> state.movement(t, a, r) },
                         onNavigateToCloseRegister = { state.navigateTo(DesktopScreenRoute.CLOSE_REGISTER) },
-                        onBack = { state.navigateTo(if (isOwner) DesktopScreenRoute.DASHBOARD else DesktopScreenRoute.POS_MAIN) },
+                        onBack = { state.navigateTo(DesktopScreenRoute.POS_MAIN) },
                         message = state.message,
                         uiMessage = state.uiMessage,
                         onClearMessage = { state.clearMessage() }
@@ -1643,9 +1643,18 @@ private fun DesktopShell(
                 }
                 DesktopScreenRoute.DAILY_REPORT -> {
                     DailySalesReportScreen(
-                        summaryForRange = { from, to -> state.db.salesSummary(from, to) },
-                        analyticsForRange = { from, to -> state.db.retailSalesAnalytics(from, to) },
+                        summaryForRange = { from, to, cashierId, orderType, categoryIds ->
+                            state.db.salesSummary(from, to, cashierId, orderType, categoryIds)
+                        },
+                        analyticsForRange = { from, to, cashierId, orderType, categoryIds ->
+                            state.db.retailSalesAnalytics(from, to, cashierId, orderType, categoryIds)
+                        },
+                        evolutionForRange = { from, to, isHourly, cashierId, orderType, categoryIds ->
+                            state.db.salesEvolution(from, to, isHourly, cashierId = cashierId, orderType = orderType, matchingCategoryIds = categoryIds)
+                        },
                         earliestSaleEpoch = { state.db.earliestCompletedSaleEpochMs() },
+                        cashiers = state.users,
+                        categories = state.categories,
                         strings = strings,
                         onBack = { state.navigateTo(DesktopScreenRoute.DASHBOARD) }
                     )

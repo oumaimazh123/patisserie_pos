@@ -4,6 +4,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import ma.elaroui.pos.desktop.DesktopLanguage
@@ -211,5 +212,53 @@ class DesktopAuthorizationSecurityTest {
         state.navigateTo(DesktopScreenRoute.DASHBOARD)
 
         assertEquals(DesktopScreenRoute.OPEN_REGISTER, state.currentRoute, "Cashier must remain on OPEN_REGISTER and cannot reach DASHBOARD")
+    }
+
+    @Test
+    fun `current session back navigation returns to POS_MAIN for manager and owner preserving session and cart`() = runBlocking {
+        val dir = Files.createTempDirectory("auth-test-current-session-back")
+        val db = WindowsPosDatabase.open(dir.resolve("pos.db"))
+        db.configureInitialSetup("Store", "Owner", "1234")
+        db.createCashier("Cashier 1", "5678")
+        val cashier = db.allUsers().first { it.role == UserRole.CASHIER }
+        val owner = db.allUsers().first { it.role == UserRole.OWNER }
+
+        val catId = db.categories.save(ma.elaroui.pos.shared.domain.Category(0L, "Cat", true, 1))
+        val prodId = db.products.save(ma.elaroui.pos.shared.domain.Product(0L, catId, "Produit", 10_00L, 0))
+
+        val state = DesktopNavState(db, dir)
+
+        // 1. Test with Owner (who previously was sent to DASHBOARD)
+        state.currentUser = owner
+        state.openRegister(100_00L)
+        val openSession = state.session
+        assertNotNull(openSession)
+        assertEquals(ma.elaroui.pos.shared.domain.RegisterSessionStatus.OPEN, openSession.status)
+        state.cart[prodId] = 2
+        assertEquals(2, state.cart[prodId])
+
+        // Owner navigates to CURRENT_SESSION
+        state.navigateTo(DesktopScreenRoute.CURRENT_SESSION)
+        assertEquals(DesktopScreenRoute.CURRENT_SESSION, state.currentRoute)
+
+        // Trigger onBack from CURRENT_SESSION -> Must return to POS_MAIN, never DASHBOARD
+        state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+        assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute, "Owner back navigation must return directly to POS_MAIN, not DASHBOARD")
+        assertEquals(owner.id, state.currentUser?.id, "Logged in user must remain intact")
+        assertEquals(openSession.id, state.session?.id, "Active session must be preserved")
+        assertEquals(ma.elaroui.pos.shared.domain.RegisterSessionStatus.OPEN, state.session?.status, "Session must still be open")
+        assertEquals(2, state.cart[prodId], "Cart contents must remain intact")
+
+        // 2. Test with Cashier as well
+        state.currentUser = cashier
+        state.navigateTo(DesktopScreenRoute.CURRENT_SESSION)
+        assertEquals(DesktopScreenRoute.CURRENT_SESSION, state.currentRoute)
+
+        state.navigateTo(DesktopScreenRoute.POS_MAIN)
+        assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute, "Cashier back navigation must also return to POS_MAIN")
+        assertEquals(cashier.id, state.currentUser?.id)
+        assertEquals(openSession.id, state.session?.id)
+        assertEquals(2, state.cart[prodId])
     }
 }

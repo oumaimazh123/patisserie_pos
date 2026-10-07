@@ -9,7 +9,7 @@ The workflow in `.github/workflows/ci.yml` runs on pushes, pull requests, and ma
 - Android: debug unit tests, lint, and debug APK assembly.
 - `CI required`: a stable aggregate check which fails if any required job fails or is skipped. Configure this check in the GitHub branch ruleset to block merging failed builds; the workflow alone does not enable branch protection.
 
-Java 21 runs Gradle; Java 17 is also installed for the Kotlin/JVM toolchain. Android SDK 37 matches `compileSdk` in `app/build.gradle.kts`. Gradle uses the checked-in wrapper. Configuration caching is disabled in CI; Gradle dependency caching and wrapper validation are provided by `setup-gradle`.
+Java 21 runs Gradle; Java 17 is also installed for the Kotlin/JVM toolchain. Android SDK package `platforms;android-37.0` matches `compileSdk` in `app/build.gradle.kts`. Gradle uses the checked-in wrapper. Configuration caching is disabled in CI; Gradle dependency caching and wrapper validation are provided by `setup-gradle`.
 
 ## Results and downloads
 

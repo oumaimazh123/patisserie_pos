@@ -163,7 +163,7 @@ class CompletePayment(
 }
 
 class OpenRegisterSession(private val sessions: RegisterSessionRepository, private val clock: Clock) {
-    suspend fun execute(id: Long, registerId: Long, cashierId: Long, openingCashCentimes: Long): UseCaseResult<RegisterSession> {
+    suspend fun execute(id: Long, registerId: Long, cashierId: Long, openingCashCentimes: Long = 0L): UseCaseResult<RegisterSession> {
         if (openingCashCentimes < 0) return UseCaseResult.Failure("Opening cash cannot be negative")
         if (sessions.findOpenByUser(cashierId) != null) return UseCaseResult.Failure("This user already has an open register session")
         val session = RegisterSession(

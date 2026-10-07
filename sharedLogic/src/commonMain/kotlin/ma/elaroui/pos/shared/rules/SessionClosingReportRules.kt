@@ -10,6 +10,11 @@ import ma.elaroui.pos.shared.domain.RegisterSessionStatus
 
 const val SESSION_CLOSING_REPORT_SETTING = "auto_print_session_closing_report"
 
+enum class SessionReportType {
+    SUMMARY,
+    DETAILED
+}
+
 data class SessionClosingSaleItem(
     val productName: String,
     val quantity: Int
@@ -36,7 +41,11 @@ data class SessionClosingReport(
     val cancelledSalesCentimes: Long
 ) {
     val completedSalesCount: Int get() = sales.size
+    val totalItemsSold: Int get() = sales.sumOf { sale -> sale.items.sumOf { it.quantity } }
     val grandTotalSalesCentimes: Long get() = paymentTotals.values.sum()
+    val cashSalesCentimes: Long get() = paymentTotals[PaymentMethod.CASH] ?: 0L
+    val cardSalesCentimes: Long get() = paymentTotals[PaymentMethod.CARD] ?: 0L
+    val expectedCashCentimes: Long get() = cashSalesCentimes + cashInCentimes - cashOutCentimes
 }
 
 /** Builds a report only from persisted records belonging to the closed session. */

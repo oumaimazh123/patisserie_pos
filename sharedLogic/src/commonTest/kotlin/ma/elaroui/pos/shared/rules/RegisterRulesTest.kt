@@ -18,6 +18,33 @@ class RegisterRulesTest {
         )
         assertEquals(58_000, result.expectedCashCentimes)
         assertEquals(-500, result.differenceCentimes)
+        // Simplified closing without physical counting or breakdown
+        assertNull(
+            RegisterClosingRules.validateClosing(
+                sessionStatus = RegisterSessionStatus.OPEN,
+                activeOrdersCount = 0,
+                closingNote = "Clôture simplifiée sans comptage"
+            )
+        )
+
+        // Simplified closing with active orders blocks
+        assertEquals(
+            RegisterClosingValidationError.ACTIVE_ORDERS_EXIST,
+            RegisterClosingRules.validateClosing(
+                sessionStatus = RegisterSessionStatus.OPEN,
+                activeOrdersCount = 1
+            )
+        )
+
+        // Simplified closing with too long note blocks
+        assertEquals(
+            RegisterClosingValidationError.CLOSING_NOTE_TOO_LONG,
+            RegisterClosingRules.validateClosing(
+                sessionStatus = RegisterSessionStatus.OPEN,
+                activeOrdersCount = 0,
+                closingNote = "A".repeat(501)
+            )
+        )
     }
 
     @Test

@@ -313,12 +313,10 @@ class CloseRegisterWorkflowTest {
             assertTrue(formatResult is ma.elaroui.pos.desktop.print.EscPosFormatResult.Success)
 
             val textOutput = String(formatResult.bytes, ma.elaroui.pos.desktop.print.FrenchEscPosEncoder.CHARSET)
-            assertTrue(textOutput.contains("Laiss"), "Report should include Laissé en caisse")
-            assertTrue(textOutput.contains("20,00 DH"), "Report should include 20,00 DH")
-            assertTrue(textOutput.contains("Montant retir"), "Report should include Montant retiré")
-            assertTrue(textOutput.contains("80,00 DH"), "Report should include 80,00 DH")
-            assertTrue(textOutput.contains("Coffre"), "Report should include destination Coffre")
-            assertTrue(textOutput.contains(uniqueRef), "Report should include unique remittance reference")
+            assertTrue(textOutput.contains("RAPPORT DE CLOTURE"))
+            assertTrue(textOutput.contains("ESPECES ATTENDUES"))
+            assertFalse(textOutput.contains("Laissé en caisse"), "Report should not include Laissé en caisse")
+            assertFalse(textOutput.contains("Montant retiré"), "Report should not include Montant retiré")
         }
     }
 
@@ -347,7 +345,7 @@ class CloseRegisterWorkflowTest {
             assertTrue(formatResult is ma.elaroui.pos.desktop.print.EscPosFormatResult.Success)
 
             val textOutput = String(formatResult.bytes, ma.elaroui.pos.desktop.print.FrenchEscPosEncoder.CHARSET)
-            assertTrue(textOutput.contains("Laiss"), "Report should include Laissé en caisse")
+            assertTrue(textOutput.contains("RAPPORT DE CLOTURE"))
             assertFalse(textOutput.contains("Montant retir"), "Report should NOT include Montant retiré when 0")
             assertFalse(textOutput.contains("Réf. Enveloppe"), "Report should NOT include Réf. Enveloppe when withdrawn is 0")
         }

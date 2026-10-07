@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,9 +39,12 @@ import ma.elaroui.pos.desktop.presentation.components.ManagementPageHeader
 import ma.elaroui.pos.desktop.presentation.components.PosColors
 import ma.elaroui.pos.desktop.presentation.components.TouchTextField
 import ma.elaroui.pos.desktop.presentation.components.touchDragScroll
+import ma.elaroui.pos.shared.domain.Category
 import ma.elaroui.pos.shared.domain.OrderStatus
 import ma.elaroui.pos.shared.domain.OrderType
 import ma.elaroui.pos.shared.domain.PaymentMethod
+import ma.elaroui.pos.shared.domain.Product
+import ma.elaroui.pos.shared.rules.CategoryHierarchyRules
 import ma.elaroui.pos.shared.rules.MoneyRules
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -167,9 +172,21 @@ internal fun filterAndSortSales(
     status: OrderStatus?,
     paymentFilter: SalesPaymentFilter,
     fromEpoch: Long?,
-    toEpoch: Long?
+    toEpoch: Long?,
+    selectedCategoryId: Long? = null,
+    categories: List<Category> = emptyList(),
+    products: List<Product> = emptyList()
 ): List<SalesHistoryRow> {
     val q = query.trim()
+
+    // Precalculate matching product IDs if category filter is active
+    val matchingProductIds: Set<Long>? = if (selectedCategoryId != null) {
+        val descendantCategoryIds = setOf(selectedCategoryId) + CategoryHierarchyRules.getAllDescendantIds(selectedCategoryId, categories)
+        products.filter { it.categoryId in descendantCategoryIds }.map { it.id }.toSet()
+    } else {
+        null
+    }
+
     val filtered = sales.filter { row ->
         val timestamp = row.paidAtEpochMillis ?: 0L
 
@@ -187,6 +204,12 @@ internal fun filterAndSortSales(
         // Date check
         if (fromEpoch != null && timestamp < fromEpoch) return@filter false
         if (toEpoch != null && timestamp > toEpoch) return@filter false
+
+        // Hierarchical Category check
+        if (matchingProductIds != null) {
+            val hasMatchingProduct = row.order.lines.any { it.productId in matchingProductIds }
+            if (!hasMatchingProduct) return@filter false
+        }
 
         // Text search check
         if (q.isNotEmpty()) {
@@ -210,6 +233,8 @@ internal fun filterAndSortSales(
 fun CompletedSalesScreen(
     sales: List<SalesHistoryRow>,
     strings: DesktopStrings,
+    categories: List<Category> = emptyList(),
+    products: List<Product> = emptyList(),
     onSelectSale: (SalesHistoryRow) -> Unit,
     onBack: (() -> Unit)? = null
 ) {
@@ -220,6 +245,7 @@ fun CompletedSalesScreen(
     var customEndDate by remember { mutableStateOf("") }
     var selectedStatus by remember { mutableStateOf<OrderStatus?>(null) }
     var selectedPaymentMethod by remember { mutableStateOf(SalesPaymentFilter.ALL) }
+    var selectedCategoryId by remember { mutableStateOf<Long?>(null) }
 
     // Pagination state
     var pageSize by remember { mutableStateOf(20) }
@@ -239,6 +265,9 @@ fun CompletedSalesScreen(
         searchQuery,
         selectedStatus,
         selectedPaymentMethod,
+        selectedCategoryId,
+        categories,
+        products,
         fromEpoch,
         toEpoch
     ) {
@@ -248,7 +277,10 @@ fun CompletedSalesScreen(
             status = selectedStatus,
             paymentFilter = selectedPaymentMethod,
             fromEpoch = fromEpoch,
-            toEpoch = toEpoch
+            toEpoch = toEpoch,
+            selectedCategoryId = selectedCategoryId,
+            categories = categories,
+            products = products
         )
     }
 
@@ -260,6 +292,7 @@ fun CompletedSalesScreen(
         customEndDate,
         selectedStatus,
         selectedPaymentMethod,
+        selectedCategoryId,
         pageSize
     ) {
         currentPage = 1
@@ -271,7 +304,8 @@ fun CompletedSalesScreen(
             customStartDate.isNotBlank() ||
             customEndDate.isNotBlank() ||
             selectedStatus != null ||
-            selectedPaymentMethod != SalesPaymentFilter.ALL
+            selectedPaymentMethod != SalesPaymentFilter.ALL ||
+            selectedCategoryId != null
 
     fun resetFilters() {
         searchQuery = ""
@@ -280,6 +314,7 @@ fun CompletedSalesScreen(
         customEndDate = ""
         selectedStatus = null
         selectedPaymentMethod = SalesPaymentFilter.ALL
+        selectedCategoryId = null
         currentPage = 1
     }
 
@@ -386,21 +421,34 @@ fun CompletedSalesScreen(
                             )
                         }
 
-                        // Filter Dropdowns Row: Period, Status, Payment Method
+                        // Filter Dropdowns Row: Category, Period, Status, Payment Method
                         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                            val isCompact = maxWidth < 760.dp
+                            val isCompact = maxWidth < 880.dp
 
                             if (isCompact) {
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    PeriodFilterDropdown(
-                                        selected = selectedPeriod,
-                                        onSelect = { selectedPeriod = it },
-                                        strings = strings,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        CategoryFilterDropdown(
+                                            categories = categories,
+                                            selectedCategoryId = selectedCategoryId,
+                                            onCategorySelected = { selectedCategoryId = it },
+                                            strings = strings,
+                                            modifier = Modifier.weight(1.2f)
+                                        )
+
+                                        PeriodFilterDropdown(
+                                            selected = selectedPeriod,
+                                            onSelect = { selectedPeriod = it },
+                                            strings = strings,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
 
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -427,11 +475,19 @@ fun CompletedSalesScreen(
                                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    CategoryFilterDropdown(
+                                        categories = categories,
+                                        selectedCategoryId = selectedCategoryId,
+                                        onCategorySelected = { selectedCategoryId = it },
+                                        strings = strings,
+                                        modifier = Modifier.weight(1.25f)
+                                    )
+
                                     PeriodFilterDropdown(
                                         selected = selectedPeriod,
                                         onSelect = { selectedPeriod = it },
                                         strings = strings,
-                                        modifier = Modifier.weight(1.3f)
+                                        modifier = Modifier.weight(1.1f)
                                     )
 
                                     StatusFilterDropdown(
@@ -809,6 +865,404 @@ private fun PaymentFilterDropdown(
         modifier = modifier,
         isFilterActive = selected != SalesPaymentFilter.ALL
     )
+}
+
+private data class CategoryFilterItem(
+    val category: Category,
+    val level: Int,
+    val hasChildren: Boolean,
+    val isExpanded: Boolean
+)
+
+@Composable
+private fun CategoryFilterDropdown(
+    categories: List<Category>,
+    selectedCategoryId: Long?,
+    onCategorySelected: (Long?) -> Unit,
+    strings: DesktopStrings,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var menuSearchQuery by remember { mutableStateOf("") }
+    val interactionSource = remember { MutableInteractionSource() }
+
+    var expandedCategoryIds by remember { mutableStateOf(emptySet<Long>()) }
+
+    val selectedCategory = remember(selectedCategoryId, categories) {
+        categories.firstOrNull { it.id == selectedCategoryId }
+    }
+
+    val categoryTree = remember(categories) {
+        CategoryHierarchyRules.buildCategoryTree(categories)
+    }
+
+    // Auto-expand ancestors of matching items or selected item
+    val searchMatchingAncestorIds = remember(categories, menuSearchQuery) {
+        val q = menuSearchQuery.trim()
+        if (q.isBlank()) {
+            emptySet<Long>()
+        } else {
+            val matchingCategories = categories.filter { it.name.contains(q, ignoreCase = true) }
+            val categoryMap = categories.associateBy { it.id }
+            val ancestors = mutableSetOf<Long>()
+            for (matching in matchingCategories) {
+                var curr = matching.parentId?.let { categoryMap[it] }
+                while (curr != null) {
+                    ancestors.add(curr.id)
+                    curr = curr.parentId?.let { categoryMap[it] }
+                }
+            }
+            ancestors
+        }
+    }
+
+    val selectedAncestorIds = remember(selectedCategoryId, categories) {
+        val categoryMap = categories.associateBy { it.id }
+        val ancestors = mutableSetOf<Long>()
+        var curr = selectedCategoryId?.let { categoryMap[it]?.parentId }?.let { categoryMap[it] }
+        while (curr != null) {
+            ancestors.add(curr.id)
+            curr = curr.parentId?.let { categoryMap[it] }
+        }
+        ancestors
+    }
+
+    val effectiveExpandedIds = remember(expandedCategoryIds, searchMatchingAncestorIds, selectedAncestorIds, menuSearchQuery) {
+        if (menuSearchQuery.isNotBlank()) {
+            expandedCategoryIds + searchMatchingAncestorIds
+        } else {
+            expandedCategoryIds + selectedAncestorIds
+        }
+    }
+
+    fun toggleCategoryExpand(catId: Long) {
+        expandedCategoryIds = if (catId in expandedCategoryIds) {
+            val descendants = CategoryHierarchyRules.getAllDescendantIds(catId, categories)
+            expandedCategoryIds - catId - descendants
+        } else {
+            expandedCategoryIds + catId
+        }
+    }
+
+    val visibleTreeItems = remember(categoryTree, effectiveExpandedIds, menuSearchQuery, searchMatchingAncestorIds) {
+        val result = mutableListOf<CategoryFilterItem>()
+        val query = menuSearchQuery.trim()
+
+        fun traverse(nodes: List<ma.elaroui.pos.shared.rules.CategoryTreeNode>) {
+            nodes.forEach { node ->
+                val matchesDirectly = query.isBlank() || node.category.name.contains(query, ignoreCase = true)
+                val isAncestorOfMatch = searchMatchingAncestorIds.contains(node.category.id)
+                val isVisible = matchesDirectly || isAncestorOfMatch
+
+                if (isVisible) {
+                    val isExpanded = effectiveExpandedIds.contains(node.category.id)
+                    val hasChildren = node.children.isNotEmpty()
+                    result.add(
+                        CategoryFilterItem(
+                            category = node.category,
+                            level = node.level,
+                            hasChildren = hasChildren,
+                            isExpanded = isExpanded
+                        )
+                    )
+                    if (hasChildren && (isExpanded || isAncestorOfMatch)) {
+                        traverse(node.children)
+                    }
+                }
+            }
+        }
+        traverse(categoryTree)
+        result
+    }
+
+    val isFilterActive = selectedCategoryId != null
+
+    Box(modifier = modifier) {
+        Surface(
+            onClick = { expanded = true },
+            interactionSource = interactionSource,
+            shape = RoundedCornerShape(10.dp),
+            color = if (isFilterActive) PosColors.PrimaryLight.copy(alpha = 0.25f) else PosColors.Surface,
+            border = BorderStroke(1.dp, if (isFilterActive) PosColors.Primary else PosColors.Border),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .pointerHoverIcon(PointerIcon.Hand)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    Text("📂", fontSize = 14.sp)
+                    Text(
+                        text = selectedCategory?.name ?: strings.allCategories,
+                        fontSize = 13.sp,
+                        fontWeight = if (isFilterActive) FontWeight.Bold else FontWeight.Medium,
+                        color = if (isFilterActive) PosColors.PrimaryDark else PosColors.TextHigh,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (isFilterActive) {
+                        IconButton(
+                            onClick = { onCategorySelected(null) },
+                            modifier = Modifier.size(24.dp).pointerHoverIcon(PointerIcon.Hand)
+                        ) {
+                            Text("✕", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = PosColors.PrimaryDark)
+                        }
+                    }
+                    Text(
+                        text = if (expanded) "▲" else "▼",
+                        fontSize = 10.sp,
+                        color = if (isFilterActive) PosColors.Primary else PosColors.TextMedium
+                    )
+                }
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = {
+                expanded = false
+                menuSearchQuery = ""
+            },
+            modifier = Modifier
+                .background(Color.White)
+                .widthIn(min = 280.dp, max = 360.dp)
+                .heightIn(max = 420.dp)
+        ) {
+            // Search Input inside Dropdown
+            Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = PosColors.Workspace,
+                    border = BorderStroke(1.dp, PosColors.Border),
+                    modifier = Modifier.fillMaxWidth().height(38.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("🔍", fontSize = 13.sp)
+                        BasicTextField(
+                            value = menuSearchQuery,
+                            onValueChange = { menuSearchQuery = it },
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                fontSize = 13.sp,
+                                color = PosColors.TextHigh,
+                                fontWeight = FontWeight.Normal
+                            ),
+                            decorationBox = { innerTextField ->
+                                if (menuSearchQuery.isEmpty()) {
+                                    Text(
+                                        strings.text("Rechercher catégorie…", "Search category…", "بحث عن فئة…"),
+                                        fontSize = 12.sp,
+                                        color = PosColors.TextLow
+                                    )
+                                }
+                                innerTextField()
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (menuSearchQuery.isNotBlank()) {
+                            IconButton(
+                                onClick = { menuSearchQuery = "" },
+                                modifier = Modifier.size(22.dp).pointerHoverIcon(PointerIcon.Hand)
+                            ) {
+                                Text("✕", fontSize = 11.sp, color = PosColors.TextMuted, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = PosColors.Border.copy(alpha = 0.5f))
+
+            // "Toutes les catégories" Root Option
+            if (menuSearchQuery.isBlank()) {
+                val isAllSelected = selectedCategoryId == null
+                val allInteraction = remember { MutableInteractionSource() }
+                val isAllHovered by allInteraction.collectIsHoveredAsState()
+
+                Surface(
+                    onClick = {
+                        onCategorySelected(null)
+                        expanded = false
+                        menuSearchQuery = ""
+                    },
+                    interactionSource = allInteraction,
+                    color = when {
+                        isAllSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
+                        isAllHovered -> PosColors.Workspace
+                        else -> Color.Transparent
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    border = if (isAllSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.3f)) else null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .height(38.dp)
+                        .pointerHoverIcon(PointerIcon.Hand)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("🏷️", fontSize = 13.sp)
+                            Text(
+                                text = strings.allCategories,
+                                fontSize = 13.sp,
+                                fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                color = if (isAllSelected) PosColors.PrimaryDark else PosColors.TextHigh
+                            )
+                        }
+                        if (isAllSelected) {
+                            Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = PosColors.Border.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 3.dp))
+            }
+
+            // Hierarchical Categories Tree
+            if (visibleTreeItems.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = strings.text("Aucune catégorie trouvée", "No category found", "لم يتم العثور على أي فئة"),
+                        fontSize = 12.sp,
+                        color = PosColors.TextMuted
+                    )
+                }
+            } else {
+                visibleTreeItems.forEach { item ->
+                    val isSelected = item.category.id == selectedCategoryId
+                    val itemInteraction = remember { MutableInteractionSource() }
+                    val isHovered by itemInteraction.collectIsHoveredAsState()
+
+                    val startPadding = when (item.level) {
+                        1 -> 8.dp
+                        2 -> 24.dp
+                        else -> 42.dp
+                    }
+
+                    Surface(
+                        onClick = {
+                            onCategorySelected(item.category.id)
+                            expanded = false
+                            menuSearchQuery = ""
+                        },
+                        interactionSource = itemInteraction,
+                        color = when {
+                            isSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
+                            isHovered -> PosColors.Workspace
+                            else -> Color.Transparent
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        border = if (isSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.35f)) else null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                            .height(36.dp)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(start = startPadding, end = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f, fill = false)
+                            ) {
+                                if (item.hasChildren) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clickable { toggleCategoryExpand(item.category.id) }
+                                            .pointerHoverIcon(PointerIcon.Hand),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = if (item.isExpanded) "▼" else "▶",
+                                            fontSize = 9.sp,
+                                            color = if (isSelected) PosColors.Primary else PosColors.TextMedium
+                                        )
+                                    }
+                                } else {
+                                    if (item.level > 1) {
+                                        Text(
+                                            text = "↳",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) PosColors.Primary else PosColors.BorderVariant
+                                        )
+                                    } else {
+                                        Spacer(modifier = Modifier.width(20.dp))
+                                    }
+                                }
+
+                                val icon = when (item.level) {
+                                    1 -> "📁"
+                                    2 -> "📂"
+                                    else -> "🏷️"
+                                }
+                                Text(icon, fontSize = 12.sp)
+
+                                Text(
+                                    text = item.category.name,
+                                    fontSize = if (item.level == 1) 13.sp else 12.sp,
+                                    fontWeight = when {
+                                        isSelected -> FontWeight.Bold
+                                        item.level == 1 -> FontWeight.Bold
+                                        item.level == 2 -> FontWeight.SemiBold
+                                        else -> FontWeight.Normal
+                                    },
+                                    color = when {
+                                        isSelected -> PosColors.PrimaryDark
+                                        item.level == 1 -> PosColors.TextHigh
+                                        else -> PosColors.TextMedium
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            if (isSelected) {
+                                Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

@@ -36,8 +36,15 @@ import ma.elaroui.pos.desktop.presentation.components.ResponsiveFlowGrid
 import ma.elaroui.pos.desktop.presentation.components.TouchNumericField
 import ma.elaroui.pos.desktop.presentation.components.TouchTextField
 import ma.elaroui.pos.desktop.presentation.components.touchDragScroll
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import ma.elaroui.pos.desktop.persistence.SalesHistoryRow
 import ma.elaroui.pos.shared.domain.CashMovement
 import ma.elaroui.pos.shared.domain.CashMovementType
+import ma.elaroui.pos.shared.domain.Order
+import ma.elaroui.pos.shared.domain.OrderStatus
+import ma.elaroui.pos.shared.domain.PaymentMethod
 import ma.elaroui.pos.shared.domain.RegisterSession
 import ma.elaroui.pos.shared.rules.MoneyParseResult
 import ma.elaroui.pos.shared.rules.MoneyRules
@@ -51,10 +58,12 @@ fun CurrentSessionScreen(
     cashMovements: List<CashMovement>,
     cashSalesCentimes: Long,
     cardSalesCentimes: Long = 0L,
+    sessionSales: List<SalesHistoryRow> = emptyList(),
     strings: DesktopStrings,
     canCloseRegister: Boolean = true,
     onNavigateToCloseRegister: () -> Unit = {},
     onCashMovementSubmitted: (CashMovementType, Long, String) -> Unit = { _, _, _ -> },
+    onNavigateToReceipt: (Order) -> Unit = {},
     onBack: (() -> Unit)? = null,
     message: String = "",
     uiMessage: UiMessage? = null,
@@ -286,6 +295,107 @@ fun CurrentSessionScreen(
                         }
                     }
                 }
+
+                // Section: Ventes de la session
+                val confirmedSales = remember(sessionSales) { sessionSales.filter { it.order.status == OrderStatus.COMPLETED } }
+                val cancelledSales = remember(sessionSales) { sessionSales.filter { it.order.status == OrderStatus.CANCELLED } }
+                val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.FRANCE) }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        strings.text("Ventes de la session", "Session sales", "مبيعات الجلسة"),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = PosColors.TextHigh
+                    )
+
+                    Text(
+                        "${sessionSales.size} " + strings.text("vente(s)", "sale(s)", "عملية"),
+                        fontSize = 13.sp,
+                        color = PosColors.TextMuted,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                if (sessionSales.isEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = PosColors.Surface,
+                        border = BorderStroke(1.dp, PosColors.Border),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text("🧾", fontSize = 28.sp)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                strings.text(
+                                    "Aucune vente enregistrée dans cette session",
+                                    "No sales recorded in this session",
+                                    "لا توجد مبيعات مسجلة في هذه الجلسة"
+                                ),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = PosColors.TextHigh
+                            )
+                        }
+                    }
+                } else {
+                    val salesScrollState = rememberScrollState()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 380.dp)
+                            .verticalScroll(salesScrollState),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Confirmed / Paid Sales
+                        if (confirmedSales.isNotEmpty()) {
+                            confirmedSales.forEach { row ->
+                                SessionSaleCard(
+                                    row = row,
+                                    isCancelled = false,
+                                    timeFormat = timeFormat,
+                                    strings = strings,
+                                    onViewReceipt = { onNavigateToReceipt(row.order) }
+                                )
+                            }
+                        }
+
+                        // Cancelled Sales
+                        if (cancelledSales.isNotEmpty()) {
+                            if (confirmedSales.isNotEmpty()) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    strings.text("Ventes annulées", "Cancelled sales", "المبيعات الملغاة"),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = PosColors.Danger
+                                )
+                            }
+                            cancelledSales.forEach { row ->
+                                SessionSaleCard(
+                                    row = row,
+                                    isCancelled = true,
+                                    timeFormat = timeFormat,
+                                    strings = strings,
+                                    onViewReceipt = null
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
 
                 // Cash Movements History Section Header
                 Row(
@@ -670,3 +780,161 @@ private fun SessionMetricCard(
         }
     }
 }
+
+@Composable
+private fun SessionSaleCard(
+    row: SalesHistoryRow,
+    isCancelled: Boolean,
+    timeFormat: SimpleDateFormat,
+    strings: DesktopStrings,
+    onViewReceipt: (() -> Unit)?
+) {
+    val order = row.order
+    val paymentLabel = when (row.paymentMethod) {
+        PaymentMethod.CASH -> strings.cash
+        PaymentMethod.CARD -> strings.text("Carte bancaire", "Bank Card", "بطاقة بنكية")
+        PaymentMethod.CARNET_CLIENT -> strings.text("Carnet client", "Customer Credit", "دفتر الزبون")
+        PaymentMethod.MOBILE_QR -> strings.text("Mobile / QR", "Mobile / QR", "محمول / QR")
+        null -> strings.text("Non réglé", "Unpaid", "غير مسدد")
+    }
+
+    val timeMs = row.paidAtEpochMillis ?: order.createdAtEpochMilliseconds
+    val timeStr = timeFormat.format(Date(timeMs))
+
+    val totalItems = order.lines.sumOf { it.quantity }
+    val maxPreviewLines = 3
+    val previewLines = order.lines.take(maxPreviewLines)
+    val remainingCount = order.lines.size - maxPreviewLines
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isCancelled) PosColors.DangerLight.copy(alpha = 0.35f) else PosColors.Surface
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (isCancelled) PosColors.Danger.copy(alpha = 0.3f) else PosColors.Border
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(14.dp)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Header Row: [Badge] Ref + Time · Payment
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isCancelled) PosColors.DangerLight else PosColors.SuccessLight,
+                        border = BorderStroke(1.dp, if (isCancelled) PosColors.Danger.copy(alpha = 0.4f) else PosColors.Success.copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            text = if (isCancelled) strings.text("Annulée", "Cancelled", "ملغاة")
+                            else strings.text("Payée", "Paid", "مسددة"),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isCancelled) PosColors.Danger else PosColors.Success,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+
+                    Text(
+                        text = order.number,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = PosColors.TextHigh
+                    )
+                }
+
+                Text(
+                    text = "$timeStr · $paymentLabel",
+                    fontSize = 12.sp,
+                    color = PosColors.TextMuted,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            // Products lines preview
+            if (order.lines.isNotEmpty()) {
+                Column(
+                    modifier = Modifier.padding(start = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    previewLines.forEach { line ->
+                        Text(
+                            text = "${line.quantity} x ${line.name}",
+                            fontSize = 12.sp,
+                            color = PosColors.TextHigh,
+                            fontWeight = FontWeight.Normal
+                        )
+                    }
+                    if (remainingCount > 0) {
+                        Text(
+                            text = "+ $remainingCount " + strings.text("autre(s) article(s)", "other article(s)", "عنصر آخر"),
+                            fontSize = 11.sp,
+                            color = PosColors.TextMuted,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            // Footer Row: Count of articles + Total Amount + Action Button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "$totalItems " + strings.text("article(s)", "article(s)", "عنصر"),
+                        fontSize = 12.sp,
+                        color = PosColors.TextMuted,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Text(
+                        text = "${MoneyRules.formatFixed(order.totalCentimes)} ${strings.currency}",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isCancelled) PosColors.Danger else PosColors.TextHigh
+                    )
+                }
+
+                if (onViewReceipt != null) {
+                    OutlinedButton(
+                        onClick = onViewReceipt,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = PosColors.Primary),
+                        border = BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .height(34.dp)
+                            .pointerHoverIcon(PointerIcon.Hand),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = strings.text("Voir le reçu", "View receipt", "عرض الإيصال"),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

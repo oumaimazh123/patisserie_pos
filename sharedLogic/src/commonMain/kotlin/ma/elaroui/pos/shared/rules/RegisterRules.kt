@@ -74,9 +74,9 @@ object RegisterCashRules {
 }
 
 data class RegisterClosingInput(
-    val countedCashCentimes: Long,
-    val leftInDrawerCentimes: Long,
-    val removedAmountCentimes: Long,
+    val countedCashCentimes: Long? = null,
+    val leftInDrawerCentimes: Long? = null,
+    val removedAmountCentimes: Long? = null,
     val remittanceReference: String? = null,
     val remittanceDestination: String? = null,
     val closingNote: String? = null,
@@ -110,17 +110,18 @@ object RegisterClosingRules {
     fun validateClosing(
         sessionStatus: RegisterSessionStatus,
         activeOrdersCount: Int,
-        countedCashCentimes: Long,
-        leftInDrawerCentimes: Long,
-        removedAmountCentimes: Long,
+        countedCashCentimes: Long? = null,
+        leftInDrawerCentimes: Long? = null,
+        removedAmountCentimes: Long? = null,
         closingNote: String? = null
     ): RegisterClosingValidationError? = when {
         sessionStatus != RegisterSessionStatus.OPEN -> RegisterClosingValidationError.SESSION_ALREADY_CLOSED
         activeOrdersCount > 0 -> RegisterClosingValidationError.ACTIVE_ORDERS_EXIST
-        countedCashCentimes < 0 -> RegisterClosingValidationError.COUNTED_CASH_NEGATIVE
-        leftInDrawerCentimes < 0 -> RegisterClosingValidationError.LEFT_IN_DRAWER_NEGATIVE
-        removedAmountCentimes < 0 -> RegisterClosingValidationError.REMOVED_AMOUNT_NEGATIVE
-        leftInDrawerCentimes + removedAmountCentimes != countedCashCentimes -> RegisterClosingValidationError.BREAKDOWN_SUM_MISMATCH
+        countedCashCentimes != null && countedCashCentimes < 0 -> RegisterClosingValidationError.COUNTED_CASH_NEGATIVE
+        leftInDrawerCentimes != null && leftInDrawerCentimes < 0 -> RegisterClosingValidationError.LEFT_IN_DRAWER_NEGATIVE
+        removedAmountCentimes != null && removedAmountCentimes < 0 -> RegisterClosingValidationError.REMOVED_AMOUNT_NEGATIVE
+        leftInDrawerCentimes != null && removedAmountCentimes != null && countedCashCentimes != null &&
+            leftInDrawerCentimes + removedAmountCentimes != countedCashCentimes -> RegisterClosingValidationError.BREAKDOWN_SUM_MISMATCH
         closingNote.orEmpty().length > 500 -> RegisterClosingValidationError.CLOSING_NOTE_TOO_LONG
         else -> null
     }

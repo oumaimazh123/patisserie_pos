@@ -125,6 +125,19 @@ class DesktopStrings(val selected: DesktopLanguage) {
     val exactAmount get() = text("Montant exact", "Exact Amount", "المبلغ بالضبط")
     val insufficientCash get() = text("Montant insuffisant", "Insufficient amount", "المبلغ غير كافٍ")
     val paymentSuccess get() = text("Paiement effectué avec succès", "Payment Completed Successfully", "تمت عملية الدفع بنجاح")
+    val saleCompletedSuccess get() = text("Vente enregistrée avec succès", "Sale registered successfully", "تم تسجيل البيع بنجاح")
+    val finishAction get() = text("Terminer", "Finish", "إنهاء")
+    val cardPaymentTitle get() = text("Paiement par carte", "Card Payment", "الدفع بالبطاقة")
+    val amountToEnterOnTpe get() = text("Montant à saisir sur le TPE :", "Amount to enter on card terminal:", "المبلغ المطلوب إدخاله على جهاز الدفع:")
+    val cardStep1 get() = text("1. Saisir manuellement le montant sur le TPE", "1. Manually enter the amount on the card terminal", "1. أدخل المبلغ يدوياً على جهاز الدفع الإلكتروني")
+    val cardStep2 get() = text("2. Demander au client de payer avec sa carte", "2. Ask the customer to pay with their card", "2. اطلب من الزبون الدفع بالبطاقة البنكية")
+    val cardStep3 get() = text("3. Attendre la confirmation du TPE", "3. Wait for terminal confirmation", "3. انتظر تأكيد عملية الدفع على الجهاز")
+    val cardStep4 get() = text("4. Cliquer sur « Valider le paiement »", "4. Click \"Validate Payment\"", "4. انقر على «تأكيد الدفع»")
+    val cardTerminalOfflineNotice get() = text(
+        "Le POS n'est pas connecté au terminal de paiement. Vérifiez que le paiement est accepté sur le TPE avant de valider.",
+        "The POS is not connected to the payment terminal. Verify that payment is accepted on the terminal before validating.",
+        "نقطة البيع غير متصلة بجهاز الدفع الإلكتروني. تأكد من قبول العملية على الجهاز قبل التأكيد."
+    )
 
     // Receipt & Printing
     val customerReceipt get() = text("Reçu client", "Customer Receipt", "إيصال الزبون")

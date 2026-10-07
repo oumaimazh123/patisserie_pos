@@ -37,11 +37,13 @@ import ma.elaroui.pos.desktop.presentation.components.touchDragScroll
 import ma.elaroui.pos.shared.domain.RegisterSessionStatus
 import ma.elaroui.pos.shared.rules.MoneyRules
 
+import ma.elaroui.pos.shared.rules.SessionReportType
+
 @Composable
 fun RegisterSessionsHistoryScreen(
     sessions: List<SessionHistoryRow>,
     strings: DesktopStrings,
-    onReprintClosingReport: (Long) -> Unit = {},
+    onReprintClosingReport: (sessionId: Long, type: SessionReportType) -> Unit = { _, _ -> },
     onBack: (() -> Unit)? = null
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -166,7 +168,7 @@ fun RegisterSessionsHistoryScreen(
 private fun SessionRowCard(
     row: SessionHistoryRow,
     strings: DesktopStrings,
-    onReprintClosingReport: (Long) -> Unit
+    onReprintClosingReport: (sessionId: Long, type: SessionReportType) -> Unit
 ) {
     val sess = row.session
     val isOpen = sess.status == RegisterSessionStatus.OPEN
@@ -405,23 +407,49 @@ private fun SessionRowCard(
                                 }
                             }
 
-                            Button(
-                                onClick = { onReprintClosingReport(sess.id) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 48.dp)
-                                    .pointerHoverIcon(PointerIcon.Hand),
-                                colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
-                                shape = RoundedCornerShape(8.dp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Text(
-                                    strings.text(
-                                        "🧾 Réimprimer le rapport de clôture",
-                                        "🧾 Reprint closing report",
-                                        "🧾 إعادة طباعة تقرير الإغلاق"
-                                    ),
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Button(
+                                    onClick = { onReprintClosingReport(sess.id, SessionReportType.SUMMARY) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                        .pointerHoverIcon(PointerIcon.Hand),
+                                    colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text(
+                                        strings.text(
+                                            "🧾 Imprimer rapport résumé",
+                                            "🧾 Print summary report",
+                                            "🧾 طباعة تقرير ملخص"
+                                        ),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+
+                                Button(
+                                    onClick = { onReprintClosingReport(sess.id, SessionReportType.DETAILED) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                        .pointerHoverIcon(PointerIcon.Hand),
+                                    colors = ButtonDefaults.buttonColors(containerColor = PosColors.SecondaryDark),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text(
+                                        strings.text(
+                                            "📋 Imprimer rapport détaillé",
+                                            "📋 Print detailed report",
+                                            "📋 طباعة تقرير مفصل"
+                                        ),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
                             }
                         }
                     }

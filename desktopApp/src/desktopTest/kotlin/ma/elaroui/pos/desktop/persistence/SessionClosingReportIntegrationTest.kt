@@ -256,7 +256,7 @@ class SessionClosingReportIntegrationTest {
             val printer = FakePrinter(PrintResult(true, "ok"))
             val state = DesktopNavState(db, Path.of("."), printer)
             state.currentUser = db.allUsers().first { it.id == cashierId }
-            val printResult = state.printSessionClosingReport(50L, automatic = false)
+            val printResult = state.printSessionClosingReport(50L, type = ma.elaroui.pos.shared.rules.SessionReportType.DETAILED, automatic = false)
             assertTrue(printResult.success)
             assertEquals(1, printer.jobs)
             assertTrue(printer.lastBytes != null)

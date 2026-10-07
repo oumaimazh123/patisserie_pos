@@ -6,9 +6,11 @@ import ma.elaroui.pos.shared.domain.RegisterSessionStatus
 import ma.elaroui.pos.shared.rules.SessionClosingReport
 import ma.elaroui.pos.shared.rules.SessionClosingSale
 import ma.elaroui.pos.shared.rules.SessionClosingSaleItem
+import ma.elaroui.pos.shared.rules.SessionReportType
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -78,17 +80,22 @@ class SessionClosingReportEscPosFormatterTest {
 
         listOf(58, 80).forEach { width ->
             val formatted = assertIs<EscPosFormatResult.Success>(
-                SessionClosingReportEscPosFormatter.format(sampleReport, "Restaurant Atlas", width)
+                SessionClosingReportEscPosFormatter.format(sampleReport, "Restaurant Atlas", width, type = SessionReportType.DETAILED)
             )
             val text = String(formatted.bytes, FrenchEscPosEncoder.CHARSET)
 
+            assertTrue(text.contains("RAPPORT DE CLOTURE - DETAIL"), "Must contain DETAILED title for width $width")
+            assertTrue(text.contains("Session :"), "Must contain Session : for width $width")
+            assertFalse(text.contains("Fermée par"), "Must NOT contain Fermée par")
             assertTrue(text.contains("Commande #1234"), "Must contain Commande #1234 for width $width")
+            assertTrue(text.contains("Paiement : Espèces"), "Must contain Paiement : Espèces for width $width")
             assertTrue(text.contains("2 x Coca-Cola"), "Must contain 2 x Coca-Cola for width $width")
             assertTrue(text.contains("1 x Sandwich Poulet"), "Must contain 1 x Sandwich Poulet for width $width")
             assertTrue(text.contains("3 x Eau"), "Must contain 3 x Eau for width $width")
             assertTrue(text.contains("Total commande : 95,00 DH"), "Must contain Total commande : 95,00 DH for width $width")
 
             assertTrue(text.contains("Commande #1235"), "Must contain Commande #1235 for width $width")
+            assertTrue(text.contains("Paiement : Carte / TPE"), "Must contain Paiement : Carte / TPE for width $width")
             assertTrue(text.contains("1 x Petit déjeuner"), "Must contain 1 x Petit déjeuner for width $width")
             assertTrue(text.contains("2 x Jus d'orange"), "Must contain 2 x Jus d'orange for width $width")
             assertTrue(text.contains("Total commande : 120,00 DH"), "Must contain Total commande : 120,00 DH for width $width")
@@ -96,7 +103,93 @@ class SessionClosingReportEscPosFormatterTest {
             assertTrue(text.contains("RÉCAPITULATIF"), "Must contain RÉCAPITULATIF for width $width")
             assertTrue(text.contains("TOTAL VENTES"), "Must contain TOTAL VENTES for width $width")
             assertTrue(text.contains("215,00 DH"), "Must contain total 215,00 DH for width $width")
+
+            // Obsolete fields removed:
+            assertFalse(text.contains("Fond initial"), "Must NOT contain Fond initial")
+            assertFalse(text.contains("Espèces comptées"), "Must NOT contain Espèces comptées")
+            assertFalse(text.contains("Écart"), "Must NOT contain Écart")
+            assertFalse(text.contains("Laissé en caisse"), "Must NOT contain Laissé en caisse")
+            assertFalse(text.contains("Montant retiré"), "Must NOT contain Montant retiré")
         }
+    }
+
+    @Test
+    fun `summary report does not contain individual orders and handles conditional caisse section`() {
+        // Case 1: No cash movements -> CAISSE section must NOT appear
+        val reportNoMovements = SessionClosingReport(
+            session = RegisterSession(
+                id = 50L,
+                status = RegisterSessionStatus.CLOSED,
+                openingCashCentimes = 20_000L,
+                registerId = 1L,
+                cashierId = 1L,
+                openedAtEpochMilliseconds = 1725816000000L,
+                closedAtEpochMilliseconds = 1725825000000L,
+                expectedCashCentimes = 0L,
+                countedCashCentimes = 0L,
+                differenceCentimes = 0L,
+                closingNote = "Bonne journée"
+            ),
+            cashierName = "Mohamed",
+            closingUserName = null,
+            sales = listOf(
+                SessionClosingSale(
+                    orderId = 201L,
+                    orderNumber = "501",
+                    paidAtEpochMilliseconds = 1725820000000L,
+                    paymentMethods = listOf(PaymentMethod.CASH),
+                    totalCentimes = 15_000L,
+                    items = listOf(SessionClosingSaleItem("Tarte", 3))
+                )
+            ),
+            paymentTotals = mapOf(PaymentMethod.CASH to 15_000L),
+            cashInCentimes = 0L,
+            cashOutCentimes = 0L,
+            cancelledSalesCount = 0,
+            cancelledSalesCentimes = 0L
+        )
+
+        val formatSummary = assertIs<EscPosFormatResult.Success>(
+            SessionClosingReportEscPosFormatter.format(reportNoMovements, "Pâtisserie Royale", 80, type = SessionReportType.SUMMARY, isReprint = true)
+        )
+        val textSummary = String(formatSummary.bytes, FrenchEscPosEncoder.CHARSET)
+
+        assertTrue(textSummary.contains("RAPPORT DE CLOTURE - RESUME"))
+        assertTrue(textSummary.contains("*** DUPLICATA / REIMPRESSION ***"))
+        assertTrue(textSummary.contains("Session N° :"))
+        assertTrue(textSummary.contains("Caissier :"))
+        assertTrue(textSummary.contains("Nombre de ventes :"))
+        assertTrue(textSummary.contains("Articles vendus :"))
+        assertTrue(textSummary.contains("Ventes espèces :"))
+        assertTrue(textSummary.contains("TOTAL VENTES :"))
+        assertTrue(textSummary.contains("ESPECES ATTENDUES :"))
+        assertTrue(textSummary.contains("150,00 DH"))
+        assertTrue(textSummary.contains("NOTE DE CLOTURE"))
+        assertTrue(textSummary.contains("Bonne journée"))
+
+        // Individual order lines must NOT be present
+        assertFalse(textSummary.contains("VENTES PAYÉES"))
+        assertFalse(textSummary.contains("Commande #501"))
+        assertFalse(textSummary.contains("Tarte"))
+
+        // CAISSE section must NOT be present when cashIn == 0 and cashOut == 0
+        assertFalse(textSummary.contains("CAISSE"))
+
+        // Case 2: Cash in = 50 DH, Cash out = 0 DH -> CAISSE section with only Entrées espèces
+        val reportWithCashIn = reportNoMovements.copy(
+            cashInCentimes = 5_000L,
+            cashOutCentimes = 0L
+        )
+        val formatWithCashIn = assertIs<EscPosFormatResult.Success>(
+            SessionClosingReportEscPosFormatter.format(reportWithCashIn, "Pâtisserie Royale", 80, type = SessionReportType.SUMMARY)
+        )
+        val textWithCashIn = String(formatWithCashIn.bytes, FrenchEscPosEncoder.CHARSET)
+        assertTrue(textWithCashIn.contains("CAISSE"))
+        assertTrue(textWithCashIn.contains("Entrées espèces :"))
+        assertTrue(textWithCashIn.contains("+50,00 DH"))
+        assertFalse(textWithCashIn.contains("Sorties espèces :"))
+        // Expected cash = 150 + 50 = 200 DH
+        assertTrue(textWithCashIn.contains("200,00 DH"))
     }
 
     private fun report() = SessionClosingReport(

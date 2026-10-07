@@ -874,7 +874,14 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         rawOrders.map { (id, order) -> order.copy(lines = linesMap[id].orEmpty()) }
     }
 
-    fun salesHistory(query: String = "", status: OrderStatus? = null, method: PaymentMethod? = null, fromEpoch: Long? = null, toEpoch: Long? = null): List<SalesHistoryRow> = read { c ->
+    fun salesHistory(
+        query: String = "",
+        status: OrderStatus? = null,
+        method: PaymentMethod? = null,
+        fromEpoch: Long? = null,
+        toEpoch: Long? = null,
+        sessionId: Long? = null
+    ): List<SalesHistoryRow> = read { c ->
         val conditions = mutableListOf<String>()
         val args = mutableListOf<Any>()
         if (query.isNotBlank()) {
@@ -886,6 +893,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         method?.let { conditions += "p.method=?"; args += it.name }
         fromEpoch?.let { conditions += "o.updated_at>=?"; args += it }
         toEpoch?.let { conditions += "o.updated_at<=?"; args += it }
+        sessionId?.let { conditions += "o.register_session_id=?"; args += it }
         val sql = "SELECT o.id, o.order_number, o.type, o.status, o.subtotal_centimes, o.discount_centimes, o.tax_centimes, o.total_centimes, o.table_id, o.register_session_id, o.cashier_id, o.created_at, o.updated_at, o.customer_name, o.customer_phone, o.pickup_date, o.preparation_status, o.custom_note, o.deposit_centimes, u.name AS cashier_name, p.method AS pay_method, p.created_at AS paid_at " +
             "FROM orders o JOIN users u ON u.id=o.cashier_id LEFT JOIN payments p ON p.order_id=o.id AND p.status='COMPLETED'" +
             (if (conditions.isEmpty()) "" else " WHERE " + conditions.joinToString(" AND ")) + " ORDER BY o.updated_at DESC"
@@ -1545,6 +1553,18 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                     )
                 }
             }
+        }
+    }
+
+    fun recordAudit(actionType: String, actingUserId: Long, entityType: String, entityId: Long?, details: String?) = read { c ->
+        c.prepareStatement("INSERT INTO audit_logs(action_type,acting_user_id,entity_type,entity_id,created_at,details) VALUES(?,?,?,?,?,?)").use {
+            it.setString(1, actionType)
+            it.setLong(2, actingUserId)
+            it.setString(3, entityType)
+            it.setObject(4, entityId)
+            it.setLong(5, System.currentTimeMillis())
+            it.setString(6, details)
+            it.executeUpdate()
         }
     }
 

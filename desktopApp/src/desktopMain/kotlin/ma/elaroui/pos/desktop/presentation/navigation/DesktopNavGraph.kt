@@ -73,6 +73,7 @@ import ma.elaroui.pos.shared.rules.CategoryPopularityRules
 import ma.elaroui.pos.shared.rules.ProductPopularityRules
 import ma.elaroui.pos.shared.rules.SESSION_CLOSING_REPORT_SETTING
 import ma.elaroui.pos.shared.rules.SessionClosingReportRules
+import ma.elaroui.pos.shared.rules.SessionReportType
 
 enum class DesktopScreenRoute {
     SETUP, LICENSE_GATE, USER_SELECTION, DASHBOARD, POS_MAIN, ACTIVE_ORDERS, PAYMENT, RECEIPT_PREVIEW,
@@ -244,6 +245,7 @@ class DesktopNavState(
     var editingOrderId by mutableStateOf<Long?>(null)
     var selectedSaleRow by mutableStateOf<SalesHistoryRow?>(null)
     var selectedReceiptKind by mutableStateOf(TicketKind.CUSTOMER)
+    var receiptReturnRoute by mutableStateOf(DesktopScreenRoute.POS_MAIN)
     var orderType by mutableStateOf(OrderType.COUNTER)
     var tableId by mutableStateOf<Long?>(null)
     var discountBasisPoints by mutableIntStateOf(0)
@@ -355,6 +357,7 @@ class DesktopNavState(
         clearMessage()
         refresh()
     }.onFailure { showError(it.message ?: strings.text("Erreur lors de la configuration", "Setup error", "خطأ في الإعداد")) }
+
 
     fun navigateTo(route: DesktopScreenRoute) {
         clearMessage()
@@ -706,10 +709,8 @@ class DesktopNavState(
                     db.settings.get(SESSION_CLOSING_REPORT_SETTING)
                 ) && (!db.settings.get("customer_printer").isNullOrBlank() || printerServiceOverride != null)
                 val printResult = if (shouldPrint) {
-                    printSessionClosingReport(closedSession.id, automatic = true)
+                    printSessionClosingReport(closedSession.id, type = SessionReportType.SUMMARY, isReprint = false, automatic = true)
                 } else null
-                val diff = closedSession.differenceCentimes ?: 0L
-                val diffText = if (diff == 0L) strings.exactMatch else "${MoneyRules.formatFixed(diff)} ${strings.currency}"
                 lock()
                 if (printResult != null && !printResult.success) {
                     pendingClosingReportRetrySessionId = closedSession.id
@@ -722,7 +723,7 @@ class DesktopNavState(
                         presentation = MessagePresentation.PERSISTENT
                     )
                 } else {
-                    showSuccess(strings.text("Caisse fermée avec succès (Écart : $diffText)", "Register closed successfully (Difference: $diffText)", "تم إغلاق الصندوق بنجاح"))
+                    showSuccess(strings.text("Caisse fermée avec succès", "Register closed successfully", "تم إغلاق الصندوق بنجاح"))
                 }
             } else {
                 val rawReason = (result as UseCaseResult.Failure).reason
@@ -739,7 +740,12 @@ class DesktopNavState(
         db.settings.put(AppSetting(SESSION_CLOSING_REPORT_SETTING, enabled.toString()))
     }
 
-    fun printSessionClosingReport(sessionId: Long, automatic: Boolean = false): PrintResult = runBlocking {
+    fun printSessionClosingReport(
+        sessionId: Long,
+        type: SessionReportType = SessionReportType.SUMMARY,
+        isReprint: Boolean = false,
+        automatic: Boolean = false
+    ): PrintResult = runBlocking {
         val automaticPrintKey = "session-closing-report:$sessionId"
         var automaticPrintAcquired = false
         try {
@@ -761,7 +767,9 @@ class DesktopNavState(
             val formatted = SessionClosingReportEscPosFormatter.format(
                 report = report,
                 establishmentName = getCompany().name,
-                paperWidth = db.settings.get("printer_width")?.toIntOrNull() ?: 80
+                paperWidth = db.settings.get("printer_width")?.toIntOrNull() ?: 80,
+                type = type,
+                isReprint = isReprint
             )
             val result = when (formatted) {
                 is EscPosFormatResult.Success -> printerService.printRaw(
@@ -1332,7 +1340,12 @@ private fun DesktopShell(
                             ),
                             strings = strings,
                             onNavigateToPrinterSettings = if (isOwner) ({ state.navigateTo(DesktopScreenRoute.PRINTER_SETTINGS) }) else null,
-                            onBack = { state.pendingOrder = null; state.navigateTo(DesktopScreenRoute.POS_MAIN) }
+                            onBack = {
+                                val target = state.receiptReturnRoute
+                                state.pendingOrder = null
+                                state.receiptReturnRoute = DesktopScreenRoute.POS_MAIN
+                                state.navigateTo(target)
+                            }
                         )
                     } ?: run { state.navigateTo(DesktopScreenRoute.POS_MAIN) }
                 }
@@ -1357,14 +1370,22 @@ private fun DesktopShell(
                     val openSess = state.session
                     val cashSales = runBlocking { openSess?.let { state.db.payments.totalCashForSession(it.id) } ?: 0L }
                     val cardSales = runBlocking { openSess?.let { state.db.payments.totalNonCashForSession(it.id) } ?: 0L }
+                    val sales = runBlocking { openSess?.let { state.db.salesHistory(sessionId = it.id) } ?: emptyList() }
                     CurrentSessionScreen(
                         session = state.session,
                         cashMovements = state.cashMovements,
                         cashSalesCentimes = cashSales,
                         cardSalesCentimes = cardSales,
+                        sessionSales = sales,
                         strings = strings,
                         canCloseRegister = state.currentUser != null,
                         onCashMovementSubmitted = { t, a, r -> state.movement(t, a, r) },
+                        onNavigateToReceipt = { order ->
+                            state.pendingOrder = order
+                            state.selectedReceiptKind = TicketKind.CUSTOMER
+                            state.receiptReturnRoute = DesktopScreenRoute.CURRENT_SESSION
+                            state.navigateTo(DesktopScreenRoute.RECEIPT_PREVIEW)
+                        },
                         onNavigateToCloseRegister = { state.navigateTo(DesktopScreenRoute.CLOSE_REGISTER) },
                         onBack = { state.navigateTo(DesktopScreenRoute.POS_MAIN) },
                         message = state.message,
@@ -1410,11 +1431,15 @@ private fun DesktopShell(
                 RegisterSessionsHistoryScreen(
                     sessions = state.sessionHistory,
                     strings = strings,
-                    onReprintClosingReport = { sessionId ->
-                        val result = state.printSessionClosingReport(sessionId)
+                    onReprintClosingReport = { sessionId, type ->
+                        val result = state.printSessionClosingReport(sessionId, type = type, isReprint = true)
                         if (result.success) {
                             state.pendingClosingReportRetrySessionId = null
-                            state.showSuccess(strings.text("Rapport de clôture envoyé à l’imprimante", "Closing report sent to printer", "تم إرسال تقرير الإغلاق إلى الطابعة"))
+                            val successMsg = when (type) {
+                                SessionReportType.SUMMARY -> strings.text("Rapport résumé envoyé à l’imprimante", "Summary report sent to printer", "تم إرسال التقرير الملخص إلى الطابعة")
+                                SessionReportType.DETAILED -> strings.text("Rapport détaillé envoyé à l’imprimante", "Detailed report sent to printer", "تم إرسال التقرير المفصل إلى الطابعة")
+                            }
+                            state.showSuccess(successMsg)
                         } else {
                             state.pendingClosingReportRetrySessionId = sessionId
                             state.showError(result.errorMessage ?: result.message, MessagePresentation.PERSISTENT)
@@ -1666,6 +1691,8 @@ private fun DesktopShell(
                     CompletedSalesScreen(
                         sales = state.salesHistory,
                         strings = strings,
+                        categories = state.categories,
+                        products = state.products,
                         onSelectSale = { row -> state.selectedSaleRow = row; state.navigateTo(DesktopScreenRoute.SALE_DETAIL) },
                         onBack = { state.navigateTo(DesktopScreenRoute.DASHBOARD) }
                     )
@@ -1678,6 +1705,7 @@ private fun DesktopShell(
                             onNavigateToReceiptPreview = { kind ->
                                 state.pendingOrder = row.order
                                 state.selectedReceiptKind = kind
+                                state.receiptReturnRoute = DesktopScreenRoute.SALE_DETAIL
                                 state.navigateTo(DesktopScreenRoute.RECEIPT_PREVIEW)
                             },
                             onBack = { state.navigateTo(DesktopScreenRoute.DASHBOARD) }

@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Java toolchains
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+      # All projects are configured by Gradle, including the Android app.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: 'platform-tools platforms;android-37 build-tools;36.0.0'
+      - name: Set up Gradle and validate wrapper
+        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 libfontconfig1
+      - name: Test desktop and shared logic
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run -a bash ./gradlew :sharedLogic:desktopTest :desktopApp:desktopTest --continue --stacktrace --console=plain --no-configuration-cache
+          else
+            bash ./gradlew :sharedLogic:desktopTest :desktopApp:desktopTest --continue --stacktrace --console=plain --no-configuration-cache
+          fi
+      - name: Build self-contained desktop application
+        run: bash ./gradlew :desktopApp:createDistributable --stacktrace --console=plain --no-configuration-cache
+      - name: Verify packaged image cache classes
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $jars = @(Get-ChildItem desktopApp/build/compose/binaries/main/app -Recurse -Filter 'desktopApp-*.jar')
+          if ($jars.Count -ne 1) { throw "Expected one packaged desktop application JAR; found $($jars.Count)" }
+          $archive = [IO.Compression.ZipFile]::OpenRead($jars[0].FullName)
+          try {
+            $required = @(
+              'ma/elaroui/pos/desktop/MainKt.class',
+              'ma/elaroui/pos/desktop/presentation/components/SafeImageKt.class',
+              'ma/elaroui/pos/desktop/presentation/components/DesktopImageCache.class',
+              'ma/elaroui/pos/desktop/presentation/components/DesktopImageCache$cache$1.class'
+            )
+            foreach ($entry in $required) {
+              if ($null -eq $archive.GetEntry($entry)) { throw "Packaged application is missing $entry" }
+            }
+          } finally { $archive.Dispose() }
+      - name: Upload desktop test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-reports-${{ matrix.os }}
+          path: |
+            desktopApp/build/reports/tests/
+            desktopApp/build/test-results/
+            sharedLogic/build/reports/tests/
+            sharedLogic/build/test-results/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Archive desktop application
+        # tar preserves executable permissions for Linux downloads.
+        run: tar -czf desktop-${{ runner.os }}.tar.gz -C desktopApp/build/compose/binaries/main/app .
+      - name: Upload desktop application
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-${{ matrix.os }}-${{ github.sha }}
+          path: desktop-${{ runner.os }}.tar.gz
+          retention-days: 7
+          if-no-files-found: error
+
+  android:
+    name: Android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Java toolchains
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: 'platform-tools platforms;android-37 build-tools;36.0.0'
+      - name: Set up Gradle and validate wrapper
+        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - name: Unit tests, lint, and debug APK
+        run: bash ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --continue --stacktrace --console=plain --no-configuration-cache
+      - name: Upload Android reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Upload debug APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+          if-no-files-found: error
+
+  ci:
+    name: CI required
+    if: always()
+    needs: [desktop, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every build and test job to pass
+        env:
+          DESKTOP_RESULT: ${{ needs.desktop.result }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+        run: |
+          test "$DESKTOP_RESULT" = success
+          test "$ANDROID_RESULT" = success

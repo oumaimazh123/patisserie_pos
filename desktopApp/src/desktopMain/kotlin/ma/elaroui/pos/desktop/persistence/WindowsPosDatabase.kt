@@ -7,6 +7,7 @@ import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.DriverManager
@@ -34,6 +35,7 @@ data class RetailSalesAnalytics(
     val byCashier: List<SalesBreakdown>,
     val cancelledSales: Int
 )
+data class SalesEvolutionPoint(val label: String, val amountCentimes: Long, val orderCount: Int)
 data class SalesHistoryRow(val order: Order, val cashierName: String, val paymentMethod: PaymentMethod?, val paidAtEpochMillis: Long?)
 data class SessionHistoryRow(
     val session: RegisterSession,
@@ -1134,13 +1136,60 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         }
     }
 
-    fun salesSummary(fromEpoch:Long?=null,toEpoch:Long?=null): SalesSummary = read { c ->
-        val range=buildList{fromEpoch?.let{add("o.updated_at>=?")};toEpoch?.let{add("o.updated_at<=?")}}
-        val where="o.status='COMPLETED'"+(if(range.isEmpty())"" else " AND "+range.joinToString(" AND "))
-        fun bindRange(p:java.sql.PreparedStatement,start:Int=1){var i=start;fromEpoch?.let{p.setLong(i++,it)};toEpoch?.let{p.setLong(i,it)}}
-        val orderValues=c.prepareStatement("SELECT COUNT(*),COALESCE(SUM(o.total_centimes),0),COALESCE(SUM(o.tax_centimes),0) FROM orders o WHERE $where").use { p->bindRange(p);p.executeQuery().use{r->r.next();Triple(r.getInt(1),r.getLong(2),r.getLong(3))} }
-        fun paid(method:String)=c.prepareStatement("SELECT COALESCE(SUM(p.amount_centimes),0) FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.method=? AND p.status='COMPLETED' AND $where").use { p->p.setString(1,method);bindRange(p,2);p.executeQuery().use { r->r.next();r.getLong(1) } }
-        SalesSummary(orderValues.first,orderValues.second,paid("CASH"),paid("CARD"),orderValues.third)
+    fun salesSummary(
+        fromEpoch: Long? = null,
+        toEpoch: Long? = null,
+        cashierId: Long? = null,
+        orderType: OrderType? = null,
+        matchingCategoryIds: Set<Long>? = null
+    ): SalesSummary = read { c ->
+        val range = buildList {
+            fromEpoch?.let { add("o.updated_at >= ?") }
+            toEpoch?.let { add("o.updated_at <= ?") }
+            cashierId?.let { add("o.cashier_id = ?") }
+            orderType?.let { add("o.type = ?") }
+            if (!matchingCategoryIds.isNullOrEmpty()) {
+                val placeholders = matchingCategoryIds.joinToString(",") { "?" }
+                add("EXISTS (SELECT 1 FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = o.id AND COALESCE(oi.category_id_snapshot, p.category_id) IN ($placeholders))")
+            }
+        }
+        val where = "o.status='COMPLETED'" + (if (range.isEmpty()) "" else " AND " + range.joinToString(" AND "))
+
+        fun bindRange(p: java.sql.PreparedStatement, start: Int = 1) {
+            var i = start
+            fromEpoch?.let { p.setLong(i++, it) }
+            toEpoch?.let { p.setLong(i++, it) }
+            cashierId?.let { p.setLong(i++, it) }
+            orderType?.let { p.setString(i++, it.name) }
+            if (!matchingCategoryIds.isNullOrEmpty()) {
+                for (catId in matchingCategoryIds) {
+                    p.setLong(i++, catId)
+                }
+            }
+        }
+
+        val orderValues = c.prepareStatement(
+            "SELECT COUNT(*),COALESCE(SUM(o.total_centimes),0),COALESCE(SUM(o.tax_centimes),0) FROM orders o WHERE $where"
+        ).use { p ->
+            bindRange(p)
+            p.executeQuery().use { r ->
+                r.next()
+                Triple(r.getInt(1), r.getLong(2), r.getLong(3))
+            }
+        }
+
+        fun paid(method: String) = c.prepareStatement(
+            "SELECT COALESCE(SUM(p.amount_centimes),0) FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.method=? AND p.status='COMPLETED' AND $where"
+        ).use { p ->
+            p.setString(1, method)
+            bindRange(p, 2)
+            p.executeQuery().use { r ->
+                r.next()
+                r.getLong(1)
+            }
+        }
+
+        SalesSummary(orderValues.first, orderValues.second, paid("CASH"), paid("CARD"), orderValues.third)
     }
 
     fun todaySalesSummary(
@@ -1193,33 +1242,201 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         )
     }
 
-    fun retailSalesAnalytics(fromEpoch: Long, toEpoch: Long): RetailSalesAnalytics = read { c ->
-        fun breakdown(sql: String): List<SalesBreakdown> = c.prepareStatement(sql).use { statement ->
-            statement.setLong(1, fromEpoch)
-            statement.setLong(2, toEpoch)
+    fun retailSalesAnalytics(
+        fromEpoch: Long,
+        toEpoch: Long,
+        cashierId: Long? = null,
+        orderType: OrderType? = null,
+        matchingCategoryIds: Set<Long>? = null
+    ): RetailSalesAnalytics = read { c ->
+        val recognizedAmount = "CASE WHEN o.subtotal_centimes=0 THEN 0 ELSE (oi.line_total_centimes*o.total_centimes/o.subtotal_centimes) END"
+
+        val baseFilter = mutableListOf("o.status='COMPLETED'", "o.updated_at BETWEEN ? AND ?")
+        val baseParams = mutableListOf<Any>(fromEpoch, toEpoch)
+
+        cashierId?.let { baseFilter.add("o.cashier_id = ?"); baseParams.add(it) }
+        orderType?.let { baseFilter.add("o.type = ?"); baseParams.add(it.name) }
+
+        val hasCatFilter = !matchingCategoryIds.isNullOrEmpty()
+        val catPlaceholders = if (hasCatFilter) matchingCategoryIds!!.joinToString(",") { "?" } else ""
+
+        fun bindAll(p: java.sql.PreparedStatement, params: List<Any>, start: Int = 1) {
+            var i = start
+            for (arg in params) {
+                when (arg) {
+                    is Long -> p.setLong(i++, arg)
+                    is String -> p.setString(i++, arg)
+                    is Int -> p.setInt(i++, arg)
+                    else -> p.setObject(i++, arg)
+                }
+            }
+        }
+
+        fun breakdown(sql: String, params: List<Any>): List<SalesBreakdown> = c.prepareStatement(sql).use { statement ->
+            bindAll(statement, params, 1)
             statement.executeQuery().use { rows ->
                 rows.map { SalesBreakdown(getString("label"), getInt("quantity"), getLong("amount")) }
             }
         }
-        val recognizedAmount = "CASE WHEN o.subtotal_centimes=0 THEN 0 ELSE (oi.line_total_centimes*o.total_centimes/o.subtotal_centimes) END"
-        val byProduct = breakdown(
-            "SELECT oi.product_name AS label,SUM(oi.quantity) AS quantity,SUM($recognizedAmount) AS amount " +
-                "FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.status='COMPLETED' AND o.updated_at BETWEEN ? AND ? " +
-                "GROUP BY oi.product_name ORDER BY amount DESC,label LIMIT 20"
-        )
-        val byCategory = breakdown(
-            "SELECT COALESCE(oi.category_name_snapshot,c.name,'Uncategorized') AS label,SUM(oi.quantity) AS quantity,SUM($recognizedAmount) AS amount " +
-                "FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN products p ON p.id=oi.product_id LEFT JOIN categories c ON c.id=p.category_id " +
-                "WHERE o.status='COMPLETED' AND o.updated_at BETWEEN ? AND ? GROUP BY COALESCE(oi.category_name_snapshot,c.name,'Uncategorized') ORDER BY amount DESC,label"
-        )
-        val byCashier = breakdown(
-            "SELECT u.name AS label,COUNT(o.id) AS quantity,SUM(o.total_centimes) AS amount FROM orders o JOIN users u ON u.id=o.cashier_id " +
-                "WHERE o.status='COMPLETED' AND o.updated_at BETWEEN ? AND ? GROUP BY u.id,u.name ORDER BY amount DESC,u.name"
-        )
-        val cancelled = c.prepareStatement("SELECT COUNT(*) FROM orders WHERE status='CANCELLED' AND updated_at BETWEEN ? AND ?").use {
-            it.setLong(1, fromEpoch); it.setLong(2, toEpoch); it.executeQuery().use { rows -> rows.next(); rows.getInt(1) }
+
+        // 1. byProduct
+        val productFilter = baseFilter.toMutableList()
+        val productParams = baseParams.toMutableList()
+        if (hasCatFilter) {
+            productFilter.add("COALESCE(oi.category_id_snapshot, p.category_id) IN ($catPlaceholders)")
+            productParams.addAll(matchingCategoryIds!!)
         }
+        val byProduct = breakdown(
+            "SELECT oi.product_name AS label, SUM(oi.quantity) AS quantity, SUM($recognizedAmount) AS amount " +
+                "FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN products p ON p.id=oi.product_id " +
+                "WHERE ${productFilter.joinToString(" AND ")} " +
+                "GROUP BY oi.product_name ORDER BY amount DESC, label LIMIT 20",
+            productParams
+        )
+
+        // 2. byCategory
+        val categoryFilter = baseFilter.toMutableList()
+        val categoryParams = baseParams.toMutableList()
+        if (hasCatFilter) {
+            categoryFilter.add("COALESCE(oi.category_id_snapshot, p.category_id) IN ($catPlaceholders)")
+            categoryParams.addAll(matchingCategoryIds!!)
+        }
+        val byCategory = breakdown(
+            "SELECT COALESCE(oi.category_name_snapshot, c.name, 'Uncategorized') AS label, SUM(oi.quantity) AS quantity, SUM($recognizedAmount) AS amount " +
+                "FROM order_items oi JOIN orders o ON o.id=oi.order_id " +
+                "LEFT JOIN products p ON p.id=oi.product_id " +
+                "LEFT JOIN categories c ON c.id=COALESCE(oi.category_id_snapshot, p.category_id) " +
+                "WHERE ${categoryFilter.joinToString(" AND ")} " +
+                "GROUP BY COALESCE(oi.category_name_snapshot, c.name, 'Uncategorized') ORDER BY amount DESC, label",
+            categoryParams
+        )
+
+        // 3. byCashier
+        val cashierFilter = baseFilter.toMutableList()
+        val cashierParams = baseParams.toMutableList()
+        if (hasCatFilter) {
+            cashierFilter.add(
+                "EXISTS (SELECT 1 FROM order_items oi_c LEFT JOIN products p_c ON p_c.id = oi_c.product_id WHERE oi_c.order_id = o.id AND COALESCE(oi_c.category_id_snapshot, p_c.category_id) IN ($catPlaceholders))"
+            )
+            cashierParams.addAll(matchingCategoryIds!!)
+        }
+        val byCashier = breakdown(
+            "SELECT u.name AS label, COUNT(o.id) AS quantity, SUM(o.total_centimes) AS amount " +
+                "FROM orders o JOIN users u ON u.id=o.cashier_id " +
+                "WHERE ${cashierFilter.joinToString(" AND ")} " +
+                "GROUP BY u.id, u.name ORDER BY amount DESC, u.name",
+            cashierParams
+        )
+
+        // 4. cancelled
+        val cancelledFilter = mutableListOf("orders.status='CANCELLED'", "orders.updated_at BETWEEN ? AND ?")
+        val cancelledParams = mutableListOf<Any>(fromEpoch, toEpoch)
+        cashierId?.let { cancelledFilter.add("orders.cashier_id = ?"); cancelledParams.add(it) }
+        orderType?.let { cancelledFilter.add("orders.type = ?"); cancelledParams.add(it.name) }
+        if (hasCatFilter) {
+            cancelledFilter.add(
+                "EXISTS (SELECT 1 FROM order_items oi_c LEFT JOIN products p_c ON p_c.id = oi_c.product_id WHERE oi_c.order_id = orders.id AND COALESCE(oi_c.category_id_snapshot, p_c.category_id) IN ($catPlaceholders))"
+            )
+            cancelledParams.addAll(matchingCategoryIds!!)
+        }
+        val cancelled = c.prepareStatement(
+            "SELECT COUNT(*) FROM orders WHERE ${cancelledFilter.joinToString(" AND ")}"
+        ).use {
+            bindAll(it, cancelledParams, 1)
+            it.executeQuery().use { rows -> rows.next(); rows.getInt(1) }
+        }
+
         RetailSalesAnalytics(byProduct, byCategory, byCashier, cancelled)
+    }
+
+    fun salesEvolution(
+        fromEpoch: Long,
+        toEpoch: Long,
+        isHourly: Boolean,
+        zoneId: ZoneId = ZoneId.systemDefault(),
+        cashierId: Long? = null,
+        orderType: OrderType? = null,
+        matchingCategoryIds: Set<Long>? = null
+    ): List<SalesEvolutionPoint> = read { c ->
+        val conditions = mutableListOf("o.status = 'COMPLETED'", "o.updated_at BETWEEN ? AND ?")
+        val params = mutableListOf<Any>(fromEpoch, toEpoch)
+
+        cashierId?.let { conditions.add("o.cashier_id = ?"); params.add(it) }
+        orderType?.let { conditions.add("o.type = ?"); params.add(it.name) }
+        if (!matchingCategoryIds.isNullOrEmpty()) {
+            val catPlaceholders = matchingCategoryIds.joinToString(",") { "?" }
+            conditions.add(
+                "EXISTS (SELECT 1 FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = o.id AND COALESCE(oi.category_id_snapshot, p.category_id) IN ($catPlaceholders))"
+            )
+            params.addAll(matchingCategoryIds)
+        }
+
+        val sql = "SELECT o.updated_at, o.total_centimes FROM orders o WHERE ${conditions.joinToString(" AND ")} ORDER BY o.updated_at"
+        val rows = c.prepareStatement(sql).use { stmt ->
+            var idx = 1
+            for (p in params) {
+                when (p) {
+                    is Long -> stmt.setLong(idx++, p)
+                    is String -> stmt.setString(idx++, p)
+                    is Int -> stmt.setInt(idx++, p)
+                    else -> stmt.setObject(idx++, p)
+                }
+            }
+            stmt.executeQuery().use { rs ->
+                val list = mutableListOf<Pair<Long, Long>>()
+                while (rs.next()) {
+                    list.add(Pair(rs.getLong(1), rs.getLong(2)))
+                }
+                list
+            }
+        }
+
+        if (isHourly) {
+            val hourlyMap = mutableMapOf<Int, Pair<Long, Int>>()
+            for ((updatedAt, amount) in rows) {
+                val zdt = Instant.ofEpochMilli(updatedAt).atZone(zoneId)
+                val h = zdt.hour
+                val current = hourlyMap.getOrDefault(h, Pair(0L, 0))
+                hourlyMap[h] = Pair(current.first + amount, current.second + 1)
+            }
+
+            val minHour = if (hourlyMap.isNotEmpty()) (hourlyMap.keys.minOrNull() ?: 8).coerceAtMost(8) else 8
+            val maxHour = if (hourlyMap.isNotEmpty()) (hourlyMap.keys.maxOrNull() ?: 20).coerceAtLeast(20) else 20
+
+            (minHour..maxHour).map { h ->
+                val data = hourlyMap[h] ?: Pair(0L, 0)
+                SalesEvolutionPoint(
+                    label = String.format("%02dh", h),
+                    amountCentimes = data.first,
+                    orderCount = data.second
+                )
+            }
+        } else {
+            val startDate = Instant.ofEpochMilli(fromEpoch).atZone(zoneId).toLocalDate()
+            val endDate = Instant.ofEpochMilli(toEpoch).atZone(zoneId).toLocalDate()
+            val dailyMap = mutableMapOf<LocalDate, Pair<Long, Int>>()
+            for ((updatedAt, amount) in rows) {
+                val d = Instant.ofEpochMilli(updatedAt).atZone(zoneId).toLocalDate()
+                val current = dailyMap.getOrDefault(d, Pair(0L, 0))
+                dailyMap[d] = Pair(current.first + amount, current.second + 1)
+            }
+
+            val formatter = DateTimeFormatter.ofPattern("dd/MM")
+            val points = mutableListOf<SalesEvolutionPoint>()
+            var curr = startDate
+            while (!curr.isAfter(endDate)) {
+                val data = dailyMap[curr] ?: Pair(0L, 0)
+                points.add(
+                    SalesEvolutionPoint(
+                        label = curr.format(formatter),
+                        amountCentimes = data.first,
+                        orderCount = data.second
+                    )
+                )
+                curr = curr.plusDays(1)
+            }
+            points
+        }
     }
 
     fun earliestCompletedSaleEpochMs(): Long? = read { c ->

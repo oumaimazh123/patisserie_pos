@@ -47,9 +47,23 @@ jobs:
         uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
         with:
           cache-read-only: ${{ github.event_name == 'pull_request' }}
-      - name: Install Linux desktop dependencies
+      - name: Setup virtual CUPS printer on Linux
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 libfontconfig1
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb libgl1 libfontconfig1 cups cups-client
+          sudo service cups start
+          sudo touch /tmp/virtual_thermal_pos.bin && sudo chmod 666 /tmp/virtual_thermal_pos.bin
+          sudo lpadmin -p POS_CLIENT -E -v file:/tmp/virtual_thermal_pos.bin -m raw
+          sudo cupsenable POS_CLIENT
+          sudo cupsaccept POS_CLIENT
+          sudo lpstat -p -d || true
+      - name: Setup virtual printer on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Start-Service Spooler -ErrorAction SilentlyContinue
+          Add-Printer -Name "Virtual Thermal POS" -DriverName "Generic / Text Only" -PortName "nul:" -ErrorAction SilentlyContinue
+          Get-Printer | Select-Object Name, DriverName, PortName
       - name: Test desktop and shared logic
         run: |
           if [[ "$RUNNER_OS" == "Linux" ]]; then
@@ -89,6 +103,14 @@ jobs:
             sharedLogic/build/test-results/
           retention-days: 14
           if-no-files-found: warn
+      - name: Upload virtual printer outputs (Linux CUPS)
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: virtual-printer-receipt-linux
+          path: /tmp/virtual_thermal_pos.bin
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Archive desktop application
         # tar preserves executable permissions for Linux downloads.
         run: tar -czf desktop-${{ runner.os }}.tar.gz -C desktopApp/build/compose/binaries/main/app .

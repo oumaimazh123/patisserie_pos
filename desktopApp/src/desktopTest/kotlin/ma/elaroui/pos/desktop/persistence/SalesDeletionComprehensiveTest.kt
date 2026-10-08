@@ -407,7 +407,7 @@ class SalesDeletionComprehensiveTest {
                 navState.login(owner, "1234")
 
                 val (_, p1, _) = setupTestEnvironment(db)
-                val session = createSession(db, owner.id)
+                val session = navState.session?.id ?: createSession(db, owner.id)
 
                 // Populate sales history
                 val o1 = db.orders.save(Order(0L, "NAV-01", OrderType.COUNTER, OrderStatus.COMPLETED, listOf(OrderLine(p1, "Espresso", 1500L, 1, 1000)), 1500L, 0L, 150L, 1500L, null, session, owner.id))

@@ -179,19 +179,17 @@ class PerUserRegisterSessionTest {
             val state = DesktopNavState(db, dataDir)
 
             state.login(a, "2501")
-            assertNull(state.session)
-            state.openRegister(1_500)
             val sessionAId = assertNotNull(state.session).id
+            assertEquals(0L, state.session?.openingCashCentimes)
 
             state.lock()
             assertNull(state.session)
             assertEquals(sessionAId, runBlocking { db.sessions.findOpenByUser(aId)?.id })
 
             state.login(b, "2502")
-            assertNull(state.session, "B must never inherit A's open session")
-            state.openRegister(2_500)
             val sessionBId = assertNotNull(state.session).id
-            assertNotEquals(sessionAId, sessionBId)
+            assertNotEquals(sessionAId, sessionBId, "B must never inherit A's open session")
+            assertEquals(0L, state.session?.openingCashCentimes)
 
             state.lock()
             state.login(a, "2501")

@@ -74,9 +74,10 @@ class ThermalTicketRendererTest {
             assertContains(preview, "Casablanca")
             val addressIndex = preview.indexOf("Casablanca")
             val totalIndex = preview.indexOf("TOTAL")
-            val footerIndex = preview.indexOf("Merci de votre visite !")
+            val footerIndex = preview.indexOf("Merci de votre visite")
             assertTrue(addressIndex > totalIndex, "Address should appear after TOTAL in footer")
-            assertTrue(footerIndex > addressIndex, "Thank you note should appear after address in footer")
+            assertTrue(footerIndex != -1, "Footer thank you note should be present")
+            assertTrue(addressIndex > footerIndex, "Address should appear under thank you note in footer")
             assertTrue(preview.lines().all { it.length <= columns }, "Line exceeds $columns columns: ${preview.lines().maxByOrNull { it.length }}")
         }
     }
@@ -279,7 +280,8 @@ class ThermalTicketRendererTest {
             val addressIndex = previewOff.indexOf("123 avenue Mohammed V")
             val footerIndex = previewOff.indexOf("Merci de votre visite !")
             assertTrue(addressIndex > 0)
-            assertTrue(footerIndex > addressIndex)
+            assertTrue(footerIndex > 0)
+            assertTrue(addressIndex > footerIndex, "Address must appear under thank you note in footer")
         }
     }
 
@@ -313,7 +315,7 @@ class ThermalTicketRendererTest {
 
             assertTrue(phoneIndex > 1, "Phone must appear in header after specialty")
             assertTrue(addressIndex > totalIndex, "Address must appear after total in footer")
-            assertTrue(footerIndex > addressIndex, "Thank you note must appear after address in footer")
+            assertTrue(addressIndex > footerIndex, "Address must appear under thank you note in footer")
 
             // Verify binary styling: Name gets DOUBLE_HEIGHT and BOLD, Specialty gets NORMAL_SIZE
             val bytes = ThermalTicketRenderer.render(order, companyWithSpecialty, TicketKind.CUSTOMER, paperWidth)

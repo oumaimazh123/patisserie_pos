@@ -230,9 +230,9 @@ fun CloseRegisterScreen(
                                         }
                                         Text(
                                             strings.text(
-                                                "Ventes espèces + Entrées d'espèces - Sorties d'espèces (Fond initial : 0.00 DH)",
-                                                "Cash sales + Cash In - Cash Out (Initial float: 0.00 DH)",
-                                                "مبيعات نقداً + إيداعات نقداً - سحوبات نقداً (رصيد البداية: 0.00 د.م)"
+                                                "Ventes espèces + Entrées d'espèces - Sorties d'espèces",
+                                                "Cash sales + Cash In - Cash Out",
+                                                "مبيعات نقداً + إيداعات نقداً - سحوبات نقداً"
                                             ),
                                             fontSize = 11.sp,
                                             color = PosColors.SecondaryLight,
@@ -261,9 +261,9 @@ fun CloseRegisterScreen(
                                             )
                                             Text(
                                                 strings.text(
-                                                    "Ventes espèces + Entrées d'espèces - Sorties d'espèces (Fond initial : 0.00 DH)",
-                                                    "Cash sales + Cash In - Cash Out (Initial float: 0.00 DH)",
-                                                    "مبيعات نقداً + إيداعات نقداً - سحوبات نقداً (رصيد البداية: 0.00 د.م)"
+                                                    "Ventes espèces + Entrées d'espèces - Sorties d'espèces",
+                                                    "Cash sales + Cash In - Cash Out",
+                                                    "مبيعات نقداً + إيداعات نقداً - سحوبات نقداً"
                                                 ),
                                                 fontSize = 11.sp,
                                                 color = PosColors.SecondaryLight,
@@ -296,12 +296,6 @@ fun CloseRegisterScreen(
                             horizontalSpacing = 12.dp,
                             verticalSpacing = 12.dp
                         ) {
-                            SummaryItemBox(
-                                label = strings.text("Fond initial", "Initial float", "رصيد البداية"),
-                                value = "${MoneyRules.formatFixed(openingCashCentimes)} ${strings.currency}",
-                                color = PosColors.BakeryBrown,
-                                modifier = Modifier.fillMaxWidth()
-                            )
                             SummaryItemBox(
                                 label = strings.cashSales,
                                 value = "${MoneyRules.formatFixed(cashSalesCentimes)} ${strings.currency}",

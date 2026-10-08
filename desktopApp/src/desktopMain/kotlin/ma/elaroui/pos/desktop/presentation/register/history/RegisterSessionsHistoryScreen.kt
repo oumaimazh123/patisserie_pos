@@ -268,10 +268,6 @@ private fun SessionRowCard(
                         )
                     }
 
-                    if (!isOpen) {
-                        DiscrepancyBadge(differenceCentimes = sess.differenceCentimes)
-                    }
-
                     Text(if (isExpanded) "▲" else "▼", fontSize = 12.sp, color = PosColors.TextMedium)
                 }
             }
@@ -286,13 +282,6 @@ private fun SessionRowCard(
                 verticalSpacing = 8.dp
             ) {
                 FinancialMetricPill(
-                    label = strings.openingCash,
-                    value = "${MoneyRules.formatFixed(sess.openingCashCentimes)} ${strings.currency}",
-                    color = PosColors.BakeryBrown,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                FinancialMetricPill(
                     label = strings.totalSales,
                     value = "${MoneyRules.formatFixed(row.totalSalesCentimes)} ${strings.currency}",
                     color = PosColors.Primary,
@@ -303,13 +292,6 @@ private fun SessionRowCard(
                     label = strings.expectedCash,
                     value = sess.expectedCashCentimes?.let { "${MoneyRules.formatFixed(it)} ${strings.currency}" } ?: "—",
                     color = PosColors.SecondaryDark,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                FinancialMetricPill(
-                    label = strings.countedCash,
-                    value = sess.countedCashCentimes?.let { "${MoneyRules.formatFixed(it)} ${strings.currency}" } ?: "—",
-                    color = PosColors.Success,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -347,43 +329,6 @@ private fun SessionRowCard(
                         }
 
                         if (!isOpen) {
-                            HorizontalDivider(color = PosColors.Border.copy(alpha = 0.5f))
-
-                            // Cashier closing breakdown
-                            ResponsiveFlowGrid(
-                                modifier = Modifier.fillMaxWidth(),
-                                minItemWidth = 140.dp,
-                                horizontalSpacing = 8.dp,
-                                verticalSpacing = 8.dp
-                            ) {
-                                DetailItem(
-                                    strings.leftInDrawer,
-                                    sess.leftInDrawerCentimes?.let { "${MoneyRules.formatFixed(it)} ${strings.currency}" } ?: "—",
-                                    Modifier.fillMaxWidth()
-                                )
-                                DetailItem(
-                                    strings.removedAmount,
-                                    sess.removedAmountCentimes?.let { "${MoneyRules.formatFixed(it)} ${strings.currency}" } ?: "—",
-                                    Modifier.fillMaxWidth()
-                                )
-                                if ((sess.removedAmountCentimes ?: 0L) > 0L) {
-                                    sess.remittanceDestination?.takeIf { it.isNotBlank() }?.let { dest ->
-                                        DetailItem(
-                                            strings.remittanceDestination,
-                                            dest,
-                                            Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                    sess.remittanceReference?.takeIf { it.isNotBlank() }?.let { ref ->
-                                        DetailItem(
-                                            strings.remittanceReference,
-                                            ref,
-                                            Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                }
-                            }
-
                             if (!sess.closingNote.isNullOrBlank()) {
                                 Surface(
                                     shape = RoundedCornerShape(6.dp),

@@ -58,9 +58,9 @@ class DesktopAuthorizationSecurityTest {
         val state = DesktopNavState(db, dir)
         state.currentUser = cashierUser // Role = CASHIER
 
-        // 1. Without open session -> fallback is OPEN_REGISTER
+        // 1. Without open session -> fallback is POS_MAIN
         state.navigateTo(DesktopScreenRoute.PRINTER_SETTINGS)
-        assertEquals(DesktopScreenRoute.OPEN_REGISTER, state.currentRoute, "Cashier without open session must fall back to OPEN_REGISTER")
+        assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute, "Cashier without open session must fall back to POS_MAIN")
 
         // 2. With open session -> fallback is POS_MAIN
         state.openRegister(10_000L)
@@ -206,12 +206,12 @@ class DesktopAuthorizationSecurityTest {
 
         val state = DesktopNavState(db, dir)
         state.currentUser = cashier
-        state.currentRoute = DesktopScreenRoute.OPEN_REGISTER
+        state.currentRoute = DesktopScreenRoute.POS_MAIN
 
         // Attempt direct navigation to Dashboard
         state.navigateTo(DesktopScreenRoute.DASHBOARD)
 
-        assertEquals(DesktopScreenRoute.OPEN_REGISTER, state.currentRoute, "Cashier must remain on OPEN_REGISTER and cannot reach DASHBOARD")
+        assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute, "Cashier must remain on POS_MAIN and cannot reach DASHBOARD")
     }
 
     @Test

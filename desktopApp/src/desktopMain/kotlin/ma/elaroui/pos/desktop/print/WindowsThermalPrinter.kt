@@ -375,12 +375,11 @@ object ThermalTicketRenderer {
                         appendLine(divider)
                     }
 
-                    if (company.address.isNotBlank()) {
-                        wrap(company.address, width).forEach { line -> appendLine(center(line, width)) }
-                        appendLine(divider)
-                    }
-
                     appendLine(center("Merci de votre visite !", width))
+                    if (company.address.isNotBlank()) {
+                        appendLine(divider)
+                        wrap(company.address, width).forEach { line -> appendLine(center(line, width)) }
+                    }
                     appendLine()
                     appendLine()
                 }

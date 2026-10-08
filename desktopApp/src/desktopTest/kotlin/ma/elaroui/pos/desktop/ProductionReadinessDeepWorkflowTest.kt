@@ -68,10 +68,10 @@ class ProductionReadinessDeepWorkflowTest {
             val owner = db.allUsers().first()
             state.login(owner, "1234")
 
-            // 1. Open register
-            state.navigateTo(DesktopScreenRoute.OPEN_REGISTER)
-            state.openRegister(30_000L) // 300.00 DH
+            // 1. Session is auto-opened with 0.00 DH and owner lands on DASHBOARD
             assertNotNull(state.session)
+            assertEquals(0L, state.session!!.openingCashCentimes, "New session must always start with 0.00 DH")
+            assertEquals(DesktopScreenRoute.DASHBOARD, state.currentRoute)
 
             // Add products
             val catId = db.categories.save(Category(0, "Viennoiseries", active = true, displayOrder = 1))
@@ -131,7 +131,8 @@ class ProductionReadinessDeepWorkflowTest {
         try {
             val owner = db.allUsers().first()
             state.login(owner, "1234")
-            state.openRegister(20_000L)
+            assertNotNull(state.session)
+            assertEquals(0L, state.session!!.openingCashCentimes)
 
             val catId = db.categories.save(Category(0, "Pâtisseries", active = true, displayOrder = 1))
             val pId = db.products.save(Product(0, catId, "Éclair Chocolat", 22_00L, 1000, active = true))
@@ -172,7 +173,8 @@ class ProductionReadinessDeepWorkflowTest {
             val cashier = db.authentication.authenticate("5555")!!
 
             state.login(cashier, "5555")
-            state.openRegister(15_000L)
+            assertNotNull(state.session)
+            assertEquals(0L, state.session!!.openingCashCentimes)
 
             // Cashier adds an item to cart in POS_MAIN
             val catId = db.categories.save(Category(0, "Jus et Boissons Fraîches", active = true, displayOrder = 1))
@@ -233,9 +235,10 @@ class ProductionReadinessDeepWorkflowTest {
                 assertTrue(preview.contains("Casablanca"), "Address must be present on customer ticket")
                 val addressIdx = preview.indexOf("Casablanca")
                 val totalIdx = preview.indexOf("TOTAL")
-                val footerIdx = preview.indexOf("Merci de votre visite !")
+                val footerIdx = preview.indexOf("Merci de votre visite")
                 assertTrue(addressIdx > totalIdx, "Address must appear after TOTAL in footer")
-                assertTrue(footerIdx > addressIdx, "Thank you note must appear after address in footer")
+                assertTrue(footerIdx != -1, "Footer thank you note must be present")
+                assertTrue(addressIdx > footerIdx, "Address must appear under thank you note in footer")
 
                 // Wi-Fi and passwords must NEVER be printed
                 assertFalse(preview.contains("Wi-Fi"), "Wi-Fi SSID must be omitted from customer ticket")
@@ -254,10 +257,8 @@ class ProductionReadinessDeepWorkflowTest {
         try {
             val owner = db.allUsers().first()
             state.login(owner, "1234")
-
-            // Opening cash: 500.00 DH
-            state.openRegister(50_000L)
             val sess = state.session!!
+            assertEquals(0L, sess.openingCashCentimes)
 
             val catId = db.categories.save(Category(0, "Tartes", active = true, displayOrder = 1))
             val pId = db.products.save(Product(0, catId, "Tartelette Citron", 20_00L, 1000, active = true))
@@ -283,16 +284,16 @@ class ProductionReadinessDeepWorkflowTest {
             // 4. Cash movement: Out 30.00 DH
             state.movement(CashMovementType.CASH_OUT, 3_000L, "Achat boîtes")
 
-            // Expected cash = Opening (500) + Cash Sales (40) + In (100) - Out (30) = 610.00 DH (61_000 centimes)
-            val expected = 50_000L + 40_00L + 10_000L - 3_000L
-            assertEquals(61_000L, expected)
+            // Expected cash = Cash Sales (40) + In (100) - Out (30) = 110.00 DH (11_000 centimes)
+            val expected = 40_00L + 10_000L - 3_000L
+            assertEquals(11_000L, expected)
 
             val sampleReport = SessionClosingReport(
                 session = sess.copy(
                     status = RegisterSessionStatus.CLOSED,
                     closedAtEpochMilliseconds = 1725825000000L,
-                    expectedCashCentimes = 61_000L,
-                    countedCashCentimes = 61_000L
+                    expectedCashCentimes = 11_000L,
+                    countedCashCentimes = 11_000L
                 ),
                 cashierName = "Directeur Yassine",
                 closingUserName = "Directeur Yassine",
@@ -342,7 +343,7 @@ class ProductionReadinessDeepWorkflowTest {
         try {
             val owner = db.allUsers().first()
             state.login(owner, "1234")
-            state.openRegister(10_000L)
+            assertNotNull(state.session)
 
             val catId = db.categories.save(Category(0, "Gâteaux", active = true, displayOrder = 1))
             val pId = db.products.save(Product(0, catId, "Macaron", 10_00L, 1000, active = true))
@@ -396,10 +397,10 @@ class ProductionReadinessDeepWorkflowTest {
             val pId = db.products.save(Product(0, catId, "Sablé", 5_00L, 1000, active = true))
             state.refresh()
 
-            // Cashier logs in and opens register
+            // Cashier logs in (auto-opens register at 0 DH)
             state.login(cashier, "2222")
-            state.openRegister(10_000L)
             assertNotNull(state.session)
+            assertEquals(0L, state.session!!.openingCashCentimes)
 
             // Cashier creates active held order
             state.cart[pId] = 4
@@ -429,7 +430,7 @@ class ProductionReadinessDeepWorkflowTest {
         try {
             val owner = db.allUsers().first()
             state.login(owner, "1234")
-            state.openRegister(10_000L)
+            assertNotNull(state.session)
 
             val catId = db.categories.save(Category(0, "Chocolats", active = true, displayOrder = 1))
             val pId = db.products.save(Product(0, catId, "Boîte Pralines", 100_00L, 1000, active = true))

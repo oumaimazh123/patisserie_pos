@@ -98,9 +98,9 @@ class EscPosProductionPrintingTest {
 
             assertEquals(-1, wifiIndex, "Customer ticket must not print Wi-Fi")
             assertTrue(addressIndex >= 0, "Customer ticket footer must contain address")
-            assertTrue(footerIndex > addressIndex, "Footer thank you must follow address")
+            assertTrue(addressIndex > footerIndex, "Address must follow thank you note in footer")
             assertEquals(listOf(bytes.size - EscPosCommands.CUT.size), cutIndexes)
-            val trailingBytes = bytes.copyOfRange(footerIndex + footer.size, cutIndexes.single())
+            val trailingBytes = bytes.copyOfRange(addressIndex + addressBytes.size, cutIndexes.single())
             assertTrue(trailingBytes.size >= EscPosCommands.RECEIPT_END_FEED_LINES)
         }
     }

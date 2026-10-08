@@ -378,7 +378,7 @@ class DesktopNavState(
     fun navigateTo(route: DesktopScreenRoute) {
         clearMessage()
         if (isOwnerRoute(route) && currentUser?.role != UserRole.OWNER) {
-            currentRoute = if (session == null) DesktopScreenRoute.OPEN_REGISTER else DesktopScreenRoute.POS_MAIN
+            currentRoute = DesktopScreenRoute.POS_MAIN
             return
         }
         currentRoute = route
@@ -406,11 +406,16 @@ class DesktopNavState(
                     failedPinAttempts.remove(selected.id)
                     pinLockoutUntil.remove(selected.id)
                     currentUser = result.value
+                    val existingOpenSession = db.sessions.findOpenByUser(result.value.id)
+                    if (existingOpenSession == null) {
+                        val newSessionId = db.nextId("register_sessions")
+                        OpenRegisterSession(db.sessions, SystemClock).execute(
+                            newSessionId, 1, result.value.id, 0L
+                        )
+                    }
                     refresh()
-                    resumedSessionNotice = session
-                    navigateTo(if (result.value.role == UserRole.OWNER) DesktopScreenRoute.DASHBOARD else {
-                        if (session == null) DesktopScreenRoute.OPEN_REGISTER else DesktopScreenRoute.POS_MAIN
-                    })
+                    resumedSessionNotice = if (existingOpenSession != null) session else null
+                    navigateTo(if (result.value.role == UserRole.OWNER) DesktopScreenRoute.DASHBOARD else DesktopScreenRoute.POS_MAIN)
                 } else {
                     handleFailedPin(selected.id)
                 }
@@ -744,8 +749,6 @@ class DesktopNavState(
                 .execute(open.id, closingWithUser)
             if (result is UseCaseResult.Success) {
                 val closedSession = result.value
-                val left = closedSession.leftInDrawerCentimes ?: 0L
-                db.settings.put(AppSetting("suggested_opening_cash", left.toString()))
                 val shouldPrint = SessionClosingReportRules.isAutoPrintEnabled(
                     db.settings.get(SESSION_CLOSING_REPORT_SETTING)
                 ) && (!db.settings.get("customer_printer").isNullOrBlank() || printerServiceOverride != null)
@@ -1232,7 +1235,7 @@ private fun DesktopShell(
     }
 
     val effectiveRoute = if (!isOwner && isOwnerRoute(state.currentRoute)) {
-        if (state.session == null) DesktopScreenRoute.OPEN_REGISTER else DesktopScreenRoute.POS_MAIN
+        DesktopScreenRoute.POS_MAIN
     } else {
         state.currentRoute
     }
@@ -1253,7 +1256,7 @@ private fun DesktopShell(
                         strings = strings,
                         onDashboard = if (isOwner) ({ state.navigateTo(DesktopScreenRoute.DASHBOARD) }) else null,
                         onOpenPos = if (effectiveRoute == DesktopScreenRoute.POS_MAIN) null else ({
-                            state.navigateTo(if (state.session == null) DesktopScreenRoute.OPEN_REGISTER else DesktopScreenRoute.POS_MAIN)
+                            state.navigateTo(DesktopScreenRoute.POS_MAIN)
                         }),
                         onActiveOrders = { state.navigateTo(DesktopScreenRoute.ACTIVE_ORDERS) },
                         onCurrentSession = { state.navigateTo(DesktopScreenRoute.CURRENT_SESSION) },
@@ -1282,7 +1285,7 @@ private fun DesktopShell(
                     DashboardScreen(
                         summary = todaySummary,
                         strings = strings,
-                        onNavigateToPos = { state.navigateTo(if (state.session == null) DesktopScreenRoute.OPEN_REGISTER else DesktopScreenRoute.POS_MAIN) },
+                        onNavigateToPos = { state.navigateTo(DesktopScreenRoute.POS_MAIN) },
                         onNavigateToSales = { state.navigateTo(DesktopScreenRoute.COMPLETED_SALES) },
                         onNavigateToDailyReport = { state.navigateTo(DesktopScreenRoute.DAILY_REPORT) },
                         onNavigateToProducts = { state.navigateTo(DesktopScreenRoute.PRODUCT_MGMT) },
@@ -1391,21 +1394,7 @@ private fun DesktopShell(
                     } ?: run { state.navigateTo(DesktopScreenRoute.POS_MAIN) }
                 }
                 DesktopScreenRoute.OPEN_REGISTER -> {
-                    val suggestedFloat = runBlocking {
-                        state.db.settings.get("suggested_opening_cash")?.toLongOrNull()
-                            ?: state.db.lastClosedSession()?.leftInDrawerCentimes
-                    }
-                    OpenRegisterScreen(
-                        strings = strings,
-                        isOwner = isOwner,
-                        suggestedOpeningCashCentimes = suggestedFloat,
-                        onOpenRegisterSubmitted = { valCent -> state.openRegister(valCent) },
-                        onBackToDashboard = { state.navigateTo(DesktopScreenRoute.DASHBOARD) },
-                        onLock = { state.lock() },
-                        errorMessage = state.message,
-                        uiMessage = state.uiMessage,
-                        onClearMessage = { state.clearMessage() }
-                    )
+                    state.navigateTo(DesktopScreenRoute.POS_MAIN)
                 }
                 DesktopScreenRoute.CURRENT_SESSION -> {
                     val openSess = state.session
@@ -1929,7 +1918,14 @@ private fun DesktopShell(
         SaleCompletedDialog(
             confirmation = confirmation,
             strings = strings,
-            onPrintReceipt = { state.printCompletedSaleReceipt(confirmation) },
+            onPrintReceipt = {
+                val orderToPreview = confirmation.order
+                state.completedSaleConfirmation = null
+                state.pendingOrder = orderToPreview
+                state.selectedReceiptKind = TicketKind.CUSTOMER
+                state.receiptReturnRoute = DesktopScreenRoute.POS_MAIN
+                state.navigateTo(DesktopScreenRoute.RECEIPT_PREVIEW)
+            },
             onFinish = {
                 state.completedSaleConfirmation = null
                 state.pendingOrder = null

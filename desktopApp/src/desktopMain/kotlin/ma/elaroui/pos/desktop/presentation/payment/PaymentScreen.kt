@@ -181,7 +181,7 @@ fun PaymentScreen(
                             )
                         }
 
-                        // Right Column: Cash Amount Input, Quick Banknotes, Keypad (only when Cash is active)
+                        // Right Column: Cash Amount Input or Manual TPE Guide
                         if (selectedMethod == PaymentMethod.CASH) {
                             val effectiveMessage = uiMessage ?: message.takeIf { it.isNotBlank() }?.let { UiMessage.error(it) }
                             val cashError = if (effectiveMessage?.isError == true) effectiveMessage.text else null
@@ -202,6 +202,16 @@ fun PaymentScreen(
                                     },
                                     onKeyPress = { onKeypadPress(it) },
                                     errorMessage = cashError,
+                                    strings = strings
+                                )
+                            }
+                        } else {
+                            Column(
+                                modifier = Modifier.weight(1.1f),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                ManualTpeGuideCard(
+                                    orderTotalCentimes = orderTotalCentimes,
                                     strings = strings
                                 )
                             }
@@ -243,6 +253,11 @@ fun PaymentScreen(
                                 },
                                 onKeyPress = { onKeypadPress(it) },
                                 errorMessage = cashError,
+                                strings = strings
+                            )
+                        } else {
+                            ManualTpeGuideCard(
+                                orderTotalCentimes = orderTotalCentimes,
                                 strings = strings
                             )
                         }
@@ -686,6 +701,115 @@ private fun ValidationButton(
             color = Color.White,
             fontSize = 17.sp,
             fontWeight = FontWeight.ExtraBold
+        )
+    }
+}
+
+@Composable
+private fun ManualTpeGuideCard(
+    orderTotalCentimes: Long,
+    strings: DesktopStrings,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(PosDimens.RadiusCard),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        border = BorderStroke(1.dp, PosColors.Border),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("💳", fontSize = 24.sp)
+                Column {
+                    Text(
+                        text = strings.text("Guide d'encaissement TPE", "Manual POS Terminal Guide", "دليل الدفع عبر جهاز TPE"),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = PosColors.BakeryBrown
+                    )
+                    Text(
+                        text = strings.text("Terminal autonome (non relié au POS)", "Standalone terminal (not connected to POS)", "جهاز مستقل (غير متصل بالصندوق)"),
+                        fontSize = 12.sp,
+                        color = PosColors.TextMuted
+                    )
+                }
+            }
+
+            HorizontalDivider(color = PosColors.Border.copy(alpha = 0.6f))
+
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                TpeStepRow(
+                    stepNumber = "1",
+                    text = strings.text(
+                        "Saisir le montant ${MoneyRules.formatFixed(orderTotalCentimes)} ${strings.currency} sur le TPE",
+                        "Enter amount ${MoneyRules.formatFixed(orderTotalCentimes)} ${strings.currency} on the terminal",
+                        "أدخل المبلغ ${MoneyRules.formatFixed(orderTotalCentimes)} ${strings.currency} على جهاز TPE"
+                    )
+                )
+                TpeStepRow(
+                    stepNumber = "2",
+                    text = strings.text(
+                        "Faire payer le client (carte bancaire ou sans contact)",
+                        "Customer presents card or contactless payment",
+                        "تقديم الزبون للبطاقة أو الدفع بدون تلامس"
+                    )
+                )
+                TpeStepRow(
+                    stepNumber = "3",
+                    text = strings.text(
+                        "Attendre la validation et le ticket d'acceptation du TPE",
+                        "Wait for approval and printed receipt from terminal",
+                        "انتظار الموافقة وطباعة وصل المعاملة من الجهاز"
+                    )
+                )
+                TpeStepRow(
+                    stepNumber = "4",
+                    text = strings.text(
+                        "Cliquer sur « Valider le paiement » ci-dessous",
+                        "Click 'Validate payment' below",
+                        "اضغط على «تأكيد الدفع» أدناه"
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TpeStepRow(stepNumber: String, text: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = PosColors.PrimaryLight,
+            modifier = Modifier.size(28.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = stepNumber,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = PosColors.PrimaryDark
+                )
+            }
+        }
+        Text(
+            text = text,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = PosColors.TextHigh
         )
     }
 }

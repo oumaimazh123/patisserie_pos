@@ -545,27 +545,15 @@ fun ReceiptPreviewScreen(
 
                                 ReceiptDashedLine()
 
-                                if (company.address.isNotBlank()) {
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Text(
-                                            company.address,
-                                            fontSize = 12.sp,
-                                            color = PosColors.TextMedium,
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
-                                    ReceiptDashedLine()
-                                }
-
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text("✨ Merci de votre visite et à bientôt ! ✨", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = PosColors.TextMedium, textAlign = TextAlign.Center)
+                                    if (company.address.isNotBlank()) {
+                                        Text(company.address, fontSize = 12.sp, color = PosColors.TextMedium, textAlign = TextAlign.Center)
+                                    }
                                     Text("Système de Caisse Certifié POS", fontSize = 10.sp, color = PosColors.TextMuted, textAlign = TextAlign.Center)
                                 }
                             }

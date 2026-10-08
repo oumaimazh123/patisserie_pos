@@ -751,7 +751,7 @@ class DesktopNavState(
                 val closedSession = result.value
                 val shouldPrint = SessionClosingReportRules.isAutoPrintEnabled(
                     db.settings.get(SESSION_CLOSING_REPORT_SETTING)
-                ) && (!db.settings.get("customer_printer").isNullOrBlank() || printerServiceOverride != null)
+                ) && (getEffectiveCustomerPrinter().isNotBlank() || printerServiceOverride != null)
                 val printResult = if (shouldPrint) {
                     printSessionClosingReport(closedSession.id, type = SessionReportType.SUMMARY, isReprint = false, automatic = true)
                 } else null

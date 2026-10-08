@@ -78,10 +78,11 @@ class EscPosProductionPrintingTest {
     }
 
     @Test
-    fun customerReceiptAndDuplicateEndWithWifiThenFooterFeedsAndOneCut() {
+    fun customerReceiptAndDuplicateEndWithAddressThenFooterFeedsAndOneCutWithoutWifi() {
         val companyWithWifi = company.copy(wifiName = "PATISSERIE_POS", wifiCode = "client-2026")
         val footer = "Merci de votre visite !".toByteArray(Charset.forName("IBM00858"))
         val wifi = "Wi-Fi: PATISSERIE_POS".toByteArray(Charset.forName("IBM00858"))
+        val addressBytes = "Rabat".toByteArray(Charset.forName("IBM00858"))
 
         listOf(false, true).forEach { isReprint ->
             val bytes = assertIs<EscPosFormatResult.Success>(
@@ -92,10 +93,12 @@ class EscPosProductionPrintingTest {
 
             val wifiIndex = bytes.indexOfSubArray(wifi)
             val footerIndex = bytes.indexOfSubArray(footer)
+            val addressIndex = bytes.indexOfSubArray(addressBytes)
             val cutIndexes = bytes.indexesOfSubArray(EscPosCommands.CUT)
 
-            assertTrue(wifiIndex >= 0)
-            assertTrue(footerIndex > wifiIndex)
+            assertEquals(-1, wifiIndex, "Customer ticket must not print Wi-Fi")
+            assertTrue(addressIndex >= 0, "Customer ticket footer must contain address")
+            assertTrue(footerIndex > addressIndex, "Footer thank you must follow address")
             assertEquals(listOf(bytes.size - EscPosCommands.CUT.size), cutIndexes)
             val trailingBytes = bytes.copyOfRange(footerIndex + footer.size, cutIndexes.single())
             assertTrue(trailingBytes.size >= EscPosCommands.RECEIPT_END_FEED_LINES)

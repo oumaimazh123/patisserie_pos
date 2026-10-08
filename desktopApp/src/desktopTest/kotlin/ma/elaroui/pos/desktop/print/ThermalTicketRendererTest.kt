@@ -60,7 +60,7 @@ class ThermalTicketRendererTest {
     }
 
     @Test
-    fun customerReceiptContainsCompanyTaxWifiAndWrapsAtPaperWidth() {
+    fun customerReceiptContainsCompanyTaxAndAddressInFooterWithoutWifiAndWrapsAtPaperWidth() {
         listOf(58 to 32, 80 to 48).forEach { (paper, columns) ->
             val preview = ThermalTicketRenderer.previewText(order, sampleCompany, TicketKind.CUSTOMER, paper)
             assertContains(preview, "Café Atlas")
@@ -68,9 +68,15 @@ class ThermalTicketRendererTest {
             assertContains(preview, "IF: IF-22")
             assertContains(preview, "RC: RC-33")
             assertContains(preview, "Patente: PAT-44")
-            assertContains(preview, "Wi-Fi: Atlas Guest")
-            assertContains(preview, "Code: secret123")
+            assertFalse(preview.contains("Wi-Fi"))
+            assertFalse(preview.contains("Code: secret123"))
             assertContains(preview, "TOTAL")
+            assertContains(preview, "Casablanca")
+            val addressIndex = preview.indexOf("Casablanca")
+            val totalIndex = preview.indexOf("TOTAL")
+            val footerIndex = preview.indexOf("Merci de votre visite !")
+            assertTrue(addressIndex > totalIndex, "Address should appear after TOTAL in footer")
+            assertTrue(footerIndex > addressIndex, "Thank you note should appear after address in footer")
             assertTrue(preview.lines().all { it.length <= columns }, "Line exceeds $columns columns: ${preview.lines().maxByOrNull { it.length }}")
         }
     }
@@ -266,10 +272,14 @@ class ThermalTicketRendererTest {
             assertContains(previewOff, "ICE: 123456789012345")
             assertContains(previewOff, "Merci de votre visite !")
 
-            // First line of previewOff must be the address (since specialty is empty), not an empty line
+            // First line of previewOff must be the phone (since name is off, specialty empty, and address in footer)
             val firstLineOff = previewOff.lines().first()
             assertTrue(firstLineOff.isNotBlank())
-            assertTrue(firstLineOff.contains("123 avenue Mohammed V"))
+            assertTrue(firstLineOff.contains("0522001122"))
+            val addressIndex = previewOff.indexOf("123 avenue Mohammed V")
+            val footerIndex = previewOff.indexOf("Merci de votre visite !")
+            assertTrue(addressIndex > 0)
+            assertTrue(footerIndex > addressIndex)
         }
     }
 
@@ -296,12 +306,14 @@ class ThermalTicketRendererTest {
             val specialtyLine = lines[1].trim()
             assertTrue(specialtyLine.contains("Boulangerie") || specialtyLine.contains("Pâtisserie Fine"))
 
-            // Following lines: Address, phone, etc.
             val addressIndex = lines.indexOfFirst { it.contains("75 Boulevard Zerktouni") }
             val phoneIndex = lines.indexOfFirst { it.contains("0522334455") }
+            val totalIndex = lines.indexOfFirst { it.contains("TOTAL") }
+            val footerIndex = lines.indexOfFirst { it.contains("Merci de votre visite !") }
 
-            assertTrue(addressIndex > 1, "Address must appear after specialty")
-            assertTrue(phoneIndex > addressIndex, "Phone must appear after address")
+            assertTrue(phoneIndex > 1, "Phone must appear in header after specialty")
+            assertTrue(addressIndex > totalIndex, "Address must appear after total in footer")
+            assertTrue(footerIndex > addressIndex, "Thank you note must appear after address in footer")
 
             // Verify binary styling: Name gets DOUBLE_HEIGHT and BOLD, Specialty gets NORMAL_SIZE
             val bytes = ThermalTicketRenderer.render(order, companyWithSpecialty, TicketKind.CUSTOMER, paperWidth)
@@ -322,8 +334,9 @@ class ThermalTicketRendererTest {
         val previewNoSpec = ThermalTicketRenderer.previewText(order, companyWithoutSpecialty, TicketKind.CUSTOMER, 80)
         val linesNoSpec = previewNoSpec.lines()
         assertEquals("Boulangerie & Pâtisserie Royale", linesNoSpec[0].trim())
-        assertEquals("75 Boulevard Zerktouni Casablanca", linesNoSpec[1].trim())
+        assertEquals("Tél: 0522334455", linesNoSpec[1].trim())
         assertFalse(linesNoSpec[1].isBlank(), "No blank line should exist when specialty is empty")
+        assertTrue(previewNoSpec.contains("75 Boulevard Zerktouni Casablanca"), "Address must be present in footer")
     }
 
     @Test

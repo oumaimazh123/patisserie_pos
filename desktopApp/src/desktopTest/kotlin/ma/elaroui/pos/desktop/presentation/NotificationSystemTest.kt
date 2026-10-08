@@ -166,8 +166,9 @@ class NotificationSystemTest {
         val msg = navState.uiMessage
         assertNotNull(msg)
         assertEquals(MessageSeverity.SUCCESS, msg.severity)
-        assertTrue(msg.text.contains("Paiement enregistré avec succès"))
-        assertEquals(DesktopScreenRoute.RECEIPT_PREVIEW, navState.currentRoute)
+        assertTrue(msg.text.contains("enregistrée avec succès") || msg.text.contains("Paiement enregistré avec succès"))
+        assertEquals(DesktopScreenRoute.POS_MAIN, navState.currentRoute)
+        assertNotNull(navState.completedSaleConfirmation)
     }
 
     @Test

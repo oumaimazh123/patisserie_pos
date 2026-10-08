@@ -816,8 +816,9 @@ class WindowsPosHardcoreTestSuite {
             assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
 
             state.pay(PaymentMethod.CASH, 5000L) // Pay with 50 DH
-            assertEquals(DesktopScreenRoute.RECEIPT_PREVIEW, state.currentRoute)
-            assertTrue(state.message.contains("Paiement enregistré") || state.message.contains("Payment completed"))
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertNotNull(state.completedSaleConfirmation)
+            assertTrue(state.message.contains("Paiement enregistré") || state.message.contains("Payment completed") || state.message.contains("Vente enregistrée"))
 
             // 2. Navigate to Settings -> Payment message MUST be cleared / no longer present
             state.navigateTo(DesktopScreenRoute.SETTINGS)
@@ -925,7 +926,8 @@ class WindowsPosHardcoreTestSuite {
             state.createOrder()
             assertNotNull(state.pendingOrder)
             state.pay(PaymentMethod.CASH, 2000L)
-            assertEquals(DesktopScreenRoute.RECEIPT_PREVIEW, state.currentRoute)
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertNotNull(state.completedSaleConfirmation)
 
             val completedOrder = db.orders.findById(state.pendingOrder!!.id)
             assertNotNull(completedOrder)

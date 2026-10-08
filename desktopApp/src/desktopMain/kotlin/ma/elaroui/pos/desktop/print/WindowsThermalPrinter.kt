@@ -281,9 +281,6 @@ object ThermalTicketRenderer {
                     if (company.specialty.isNotBlank()) {
                         wrap(company.specialty, width).forEach { line -> appendLine(center(line, width)) }
                     }
-                    if (company.address.isNotBlank()) {
-                        wrap(company.address, width).forEach { line -> appendLine(center(line, width)) }
-                    }
                     if (company.phone.isNotBlank()) {
                         appendLine(center("Tél: ${company.phone}", width))
                     }
@@ -378,9 +375,8 @@ object ThermalTicketRenderer {
                         appendLine(divider)
                     }
 
-                    if (company.wifiName.isNotBlank() || company.wifiCode.isNotBlank()) {
-                        if (company.wifiName.isNotBlank()) appendLine(center("Wi-Fi: ${company.wifiName}", width))
-                        if (company.wifiCode.isNotBlank()) appendLine(center("Code: ${company.wifiCode}", width))
+                    if (company.address.isNotBlank()) {
+                        wrap(company.address, width).forEach { line -> appendLine(center(line, width)) }
                         appendLine(divider)
                     }
 

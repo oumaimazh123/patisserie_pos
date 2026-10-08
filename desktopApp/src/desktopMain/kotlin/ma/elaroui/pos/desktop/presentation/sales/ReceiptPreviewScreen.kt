@@ -416,14 +416,7 @@ fun ReceiptPreviewScreen(
                                             textAlign = TextAlign.Center
                                         )
                                     }
-                                    if (company.address.isNotBlank()) {
-                                        Text(
-                                            company.address,
-                                            fontSize = 12.sp,
-                                            color = PosColors.TextMedium,
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
+
                                     if (company.phone.isNotBlank()) {
                                         Text(
                                             "Tél : ${company.phone}",
@@ -552,14 +545,17 @@ fun ReceiptPreviewScreen(
 
                                 ReceiptDashedLine()
 
-                                if (company.wifiName.isNotBlank() || company.wifiCode.isNotBlank()) {
+                                if (company.address.isNotBlank()) {
                                     Column(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                        horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
-                                        if (company.wifiName.isNotBlank()) Text("📶 Wi-Fi : ${company.wifiName}", fontSize = 11.sp, color = PosColors.TextMedium)
-                                        if (company.wifiCode.isNotBlank()) Text("Mot de passe : ${company.wifiCode}", fontSize = 11.sp, color = PosColors.TextMedium)
+                                        Text(
+                                            company.address,
+                                            fontSize = 12.sp,
+                                            color = PosColors.TextMedium,
+                                            textAlign = TextAlign.Center
+                                        )
                                     }
                                     ReceiptDashedLine()
                                 }

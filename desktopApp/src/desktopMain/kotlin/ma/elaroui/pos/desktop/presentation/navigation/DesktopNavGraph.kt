@@ -2,16 +2,23 @@
 
 package ma.elaroui.pos.desktop.presentation.navigation
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.nio.file.Files
 import java.nio.file.Path
 import org.jetbrains.skia.Image
@@ -109,6 +116,14 @@ fun isOwnerRoute(route: DesktopScreenRoute): Boolean = when (route) {
 }
 
 private object SystemClock : Clock { override fun now() = EpochMilliseconds(System.currentTimeMillis()) }
+
+data class CompletedSaleConfirmation(
+    val order: Order,
+    val payment: Payment,
+    val paymentMethod: PaymentMethod,
+    val receivedCentimes: Long?,
+    val changeCentimes: Long?
+)
 
 class DesktopNavState(
     val db: WindowsPosDatabase,
@@ -246,6 +261,7 @@ class DesktopNavState(
     var selectedSaleRow by mutableStateOf<SalesHistoryRow?>(null)
     var selectedReceiptKind by mutableStateOf(TicketKind.CUSTOMER)
     var receiptReturnRoute by mutableStateOf(DesktopScreenRoute.POS_MAIN)
+    var completedSaleConfirmation by mutableStateOf<CompletedSaleConfirmation?>(null)
     var orderType by mutableStateOf(OrderType.COUNTER)
     var tableId by mutableStateOf<Long?>(null)
     var discountBasisPoints by mutableIntStateOf(0)
@@ -626,39 +642,7 @@ class DesktopNavState(
             .execute(order.id, method, received, "${order.id}-${System.nanoTime()}", currentUser!!.id)
         if (result is UseCaseResult.Success) {
             val payment = result.value
-            val company = getCompany()
             val customer = getEffectiveCustomerPrinter()
-            val width = db.settings.get("printer_width")?.toIntOrNull() ?: 80
-            val table = order.tableId?.let { id -> tables.firstOrNull { it.id == id } }
-            val area = table?.let { selected -> areas.firstOrNull { it.id == selected.areaId } }
-
-            var printNotice: String? = null
-            var printWarning = false
-            if (customer.isNotBlank()) {
-                val printResult = submitAutomaticDocument(
-                    key = "receipt:${order.id}:${payment.id}", printerName = customer, role = PrinterRole.CASHIER_RECEIPT,
-                    request = EscPosPrintRequest(
-                        order, company, TicketKind.CUSTOMER, width, isReprint = false,
-                        paymentMethod = method, receivedCentimes = received, changeCentimes = payment.changeCentimes,
-                        cashierName = currentUser?.name, tableLabel = table?.name, areaLabel = area?.name
-                    )
-                )
-                if (!printResult.success) {
-                    printNotice = strings.text(
-                        "Paiement enregistré avec succès, mais erreur d'impression : ${printResult.errorMessage}",
-                        "Payment completed successfully, but print error: ${printResult.errorMessage}",
-                        "تم تسجيل الدفع بنجاح، لكن حدث خطأ في الطباعة: ${printResult.errorMessage}"
-                    )
-                    printWarning = true
-                }
-            } else {
-                printNotice = strings.text(
-                    "Paiement enregistré avec succès. Aucune imprimante connectée trouvée.",
-                    "Payment completed successfully. No connected printer found.",
-                    "تم تسجيل الدفع بنجاح. لم يتم العثور على طابعة متصلة."
-                )
-                printWarning = true
-            }
 
             val drawerEnabled = db.settings.get("cash_drawer_enabled") == "true"
             if (method == PaymentMethod.CASH && drawerEnabled && customer.isNotBlank() &&
@@ -667,13 +651,70 @@ class DesktopNavState(
                 if (!drawerResult.success) automaticPrintGuard.releaseAfterFailure("drawer:${order.id}:${payment.id}")
             }
 
-            showSuccess(printNotice ?: strings.text("Paiement enregistré avec succès", "Payment completed successfully", "تم تسجيل الدفع بنجاح"))
-            selectedReceiptKind = TicketKind.CUSTOMER
-            currentRoute = DesktopScreenRoute.RECEIPT_PREVIEW
+            completedSaleConfirmation = CompletedSaleConfirmation(
+                order = order,
+                payment = payment,
+                paymentMethod = method,
+                receivedCentimes = received,
+                changeCentimes = payment.changeCentimes
+            )
+            cart.clear()
+            showSuccess(strings.saleCompletedSuccess)
+            currentRoute = DesktopScreenRoute.POS_MAIN
             refresh()
         } else {
             val rawReason = (result as UseCaseResult.Failure).reason
             showError(mapFailureToFrench(rawReason))
+        }
+    }
+
+    fun printCompletedSaleReceipt(confirmation: CompletedSaleConfirmation) = runBlocking {
+        val company = getCompany()
+        val customer = getEffectiveCustomerPrinter()
+        val width = db.settings.get("printer_width")?.toIntOrNull() ?: 80
+        val table = confirmation.order.tableId?.let { id -> tables.firstOrNull { it.id == id } }
+        val area = table?.let { selected -> areas.firstOrNull { it.id == selected.areaId } }
+
+        if (customer.isBlank()) {
+            showError(strings.text(
+                "Aucune imprimante connectée trouvée.",
+                "No connected printer found.",
+                "لم يتم العثور على طابعة متصلة."
+            ))
+            return@runBlocking
+        }
+
+        val printKey = "receipt:${confirmation.order.id}:${confirmation.payment.id}:${System.currentTimeMillis()}"
+        val printResult = submitAutomaticDocument(
+            key = printKey,
+            printerName = customer,
+            role = PrinterRole.CASHIER_RECEIPT,
+            request = EscPosPrintRequest(
+                confirmation.order,
+                company,
+                TicketKind.CUSTOMER,
+                width,
+                isReprint = false,
+                paymentMethod = confirmation.paymentMethod,
+                receivedCentimes = confirmation.receivedCentimes,
+                changeCentimes = confirmation.changeCentimes,
+                cashierName = currentUser?.name,
+                tableLabel = table?.name,
+                areaLabel = area?.name
+            )
+        )
+        if (!printResult.success) {
+            showError(strings.text(
+                "Erreur d'impression : ${printResult.errorMessage}",
+                "Print error: ${printResult.errorMessage}",
+                "خطأ في الطباعة: ${printResult.errorMessage}"
+            ))
+        } else {
+            showSuccess(strings.text(
+                "Ticket envoyé à l'imprimante avec succès",
+                "Receipt sent to printer successfully",
+                "تم إرسال الإيصال إلى الطابعة بنجاح"
+            ))
         }
     }
 
@@ -1884,6 +1925,18 @@ private fun DesktopShell(
         )
     }
 
+    state.completedSaleConfirmation?.let { confirmation ->
+        SaleCompletedDialog(
+            confirmation = confirmation,
+            strings = strings,
+            onPrintReceipt = { state.printCompletedSaleReceipt(confirmation) },
+            onFinish = {
+                state.completedSaleConfirmation = null
+                state.pendingOrder = null
+            }
+        )
+    }
+
     if (showLogoutReminder) {
         AlertDialog(
             onDismissRequest = { if (!logoutActionInProgress) showLogoutReminder = false },
@@ -1998,5 +2051,166 @@ private fun loadCompany(db: WindowsPosDatabase): ReceiptCompany = runBlocking {
         wifiCode = db.settings.get("wifi_code").orEmpty(),
         logoPath = db.settings.get("restaurant_logo_uri").orEmpty(),
         printEstablishmentName = db.settings.get("print_establishment_name")?.toBooleanStrictOrNull() ?: true
+    )
+}
+
+@Composable
+fun SaleCompletedDialog(
+    confirmation: CompletedSaleConfirmation,
+    strings: DesktopStrings,
+    onPrintReceipt: () -> Unit,
+    onFinish: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onFinish,
+        icon = {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .background(PosColors.Success.copy(alpha = 0.12f), RoundedCornerShape(28.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("✓", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = PosColors.Success)
+            }
+        },
+        title = {
+            Text(
+                text = strings.saleCompletedSuccess,
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Order details card
+                Surface(
+                    color = PosColors.Workspace,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, PosColors.Border),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(strings.text("Commande :", "Order:", "الطلب:"), color = PosColors.TextMedium, fontSize = 13.sp)
+                            Text(confirmation.order.number, fontWeight = FontWeight.Bold, color = PosColors.TextHigh, fontSize = 14.sp)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(strings.text("Mode de paiement :", "Payment method:", "طريقة الدفع:"), color = PosColors.TextMedium, fontSize = 13.sp)
+                            val methodText = when (confirmation.paymentMethod) {
+                                PaymentMethod.CASH -> strings.cashSales
+                                PaymentMethod.CARD -> strings.cardSales
+                                PaymentMethod.CARNET_CLIENT -> "CARNET CLIENT"
+                                PaymentMethod.MOBILE_QR -> "MOBILE / QR"
+                            }
+                            Text(methodText, fontWeight = FontWeight.SemiBold, color = PosColors.TextHigh, fontSize = 13.sp)
+                        }
+                        HorizontalDivider(color = PosColors.Border, thickness = 1.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(strings.text("Total payé :", "Total paid:", "المجموع المدفوع:"), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = PosColors.TextHigh)
+                            Text(
+                                "${MoneyRules.formatFixed(confirmation.order.totalCentimes)} DH",
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 18.sp,
+                                color = PosColors.PrimaryDark
+                            )
+                        }
+                    }
+                }
+
+                // If cash payment and change given
+                if (confirmation.paymentMethod == PaymentMethod.CASH) {
+                    val received = confirmation.receivedCentimes ?: confirmation.order.totalCentimes
+                    val change = confirmation.changeCentimes ?: 0L
+                    Surface(
+                        color = if (change > 0) PosColors.SuccessLight else PosColors.Workspace,
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, if (change > 0) PosColors.Success.copy(alpha = 0.3f) else PosColors.Border),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(strings.amountReceived, fontSize = 13.sp, color = PosColors.TextMedium)
+                                Text("${MoneyRules.formatFixed(received)} DH", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
+                            if (change > 0) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(strings.changeDue, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = PosColors.Success)
+                                    Text(
+                                        "${MoneyRules.formatFixed(change)} DH",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 20.sp,
+                                        color = PosColors.Success
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onFinish,
+                colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .height(48.dp)
+                    .pointerHoverIcon(PointerIcon.Hand)
+            ) {
+                Text(
+                    "✓ " + strings.finishAction,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = onPrintReceipt,
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, PosColors.Primary),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = PosColors.Primary),
+                modifier = Modifier
+                    .height(48.dp)
+                    .pointerHoverIcon(PointerIcon.Hand)
+            ) {
+                Text(
+                    "🖨️ " + strings.printReceipt,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+            }
+        }
     )
 }

@@ -322,7 +322,7 @@ class ProductionCandidateReleaseTest {
         assertTrue(ticket80.contains("2 x Espresso"))
         assertTrue(ticket80.contains("TOTAL"))
         assertTrue(ticket80.contains("30.00 DH"))
-        assertTrue(ticket80.contains("Wi-Fi: Cafe_Central_Guest"))
+        assertFalse(ticket80.contains("Wi-Fi"))
 
         // 58mm format
         val ticket58 = ThermalTicketRenderer.previewText(sampleOrder, company, TicketKind.CUSTOMER, 58)

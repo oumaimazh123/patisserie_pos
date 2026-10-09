@@ -56,6 +56,12 @@ class CreateOrder(
         if (session.status != RegisterSessionStatus.OPEN) return UseCaseResult.Failure("Register session is not open")
         if (session.cashierId != cashierId) return UseCaseResult.Failure("Register session belongs to another user")
         val existingOrder = orders.findById(id)
+        if (existingOrder != null) {
+            if (!OrderTransitionRules.canEdit(existingOrder.status)) return UseCaseResult.Failure("Order cannot be edited")
+            if (existingOrder.cashierId != cashierId || existingOrder.registerSessionId != sessionId)
+                return UseCaseResult.Failure("Order belongs to another user session")
+        }
+        if (lineItems.isEmpty()) return UseCaseResult.Failure("Order cannot be empty")
         if (type != OrderType.DINE_IN && tableId != null) return UseCaseResult.Failure("Only dine-in orders can use a table")
         if (tableId != null) {
             val table=tables.findById(tableId) ?: return UseCaseResult.Failure("Table not found")
@@ -66,13 +72,13 @@ class CreateOrder(
             val product = products.findById(productId) ?: return UseCaseResult.Failure("Product $productId not found")
             if (qty <= 0) return UseCaseResult.Failure("Product quantity must be positive")
             if (!product.active || !product.available) return UseCaseResult.Failure("Product ${product.name} is not available")
-            val category = categories.findById(product.categoryId) ?: return UseCaseResult.Failure("Category not found")
-            val validation = ProductValidationRules.validate(product.name, product.priceCentimes, product.taxRateBasisPoints, category.active)
+            val category = product.categoryId?.let { categories.findById(it) }
+            val validation = ProductValidationRules.validate(product.name, product.priceCentimes, product.taxRateBasisPoints, category?.active ?: true)
             if (validation != null) return UseCaseResult.Failure("Invalid product: $validation")
-            OrderLine(
+            existingOrder?.lines?.firstOrNull { it.productId == productId }?.copy(quantity = qty) ?: OrderLine(
                 product.id, product.name, product.priceCentimes, qty, product.taxRateBasisPoints,
-                categoryIdSnapshot = category.id,
-                categoryNameSnapshot = category.name
+                categoryIdSnapshot = category?.id,
+                categoryNameSnapshot = category?.name
             )
         }
 
@@ -178,10 +184,10 @@ class OpenRegisterSession(private val sessions: RegisterSessionRepository, priva
             countedCashCentimes = null,
             differenceCentimes = null
         )
-        runCatching { sessions.save(session) }.getOrElse {
+        val savedId = runCatching { sessions.save(session) }.getOrElse {
             return UseCaseResult.Failure("This user already has an open register session")
         }
-        return UseCaseResult.Success(session)
+        return UseCaseResult.Success(session.copy(id = savedId))
     }
 }
 
@@ -295,8 +301,11 @@ class RecordCashMovement(
 
 class SaveProduct(private val categories: CategoryRepository, private val products: ProductRepository) {
     suspend fun execute(product: Product): UseCaseResult<Long> {
-        val category = categories.findById(product.categoryId) ?: return UseCaseResult.Failure("Category not found")
-        ProductValidationRules.validate(product.name, product.priceCentimes, product.taxRateBasisPoints, category.active)?.let {
+        val category = product.categoryId?.let { categories.findById(it) }
+        if (product.categoryId != null && category == null) {
+            return UseCaseResult.Failure("Category not found")
+        }
+        ProductValidationRules.validate(product.name, product.priceCentimes, product.taxRateBasisPoints, category?.active ?: true)?.let {
             return UseCaseResult.Failure(it.toString())
         }
         return try {

@@ -85,7 +85,7 @@ class CreateOrderUseCase @Inject constructor(
         for (item in cartItems) {
             val freshProduct = productRepository.getProductById(item.product.id)
                 ?: throw DomainException("Produit '${item.product.name}' introuvable.")
-            val categorySnapshot = categoryRepository.getCategoryById(freshProduct.categoryId)
+            val categorySnapshot = freshProduct.categoryId?.let { categoryRepository.getCategoryById(it) }
 
             if (!freshProduct.active || !freshProduct.available) {
                 throw DomainException("Le produit '${freshProduct.name}' n'est plus disponible à la vente.")
@@ -218,7 +218,7 @@ class UpdateOpenOrderUseCase @Inject constructor(
         for (item in updatedCartItems) {
             val freshProduct = productRepository.getProductById(item.product.id)
                 ?: throw DomainException("Produit '${item.product.name}' introuvable.")
-            val categorySnapshot = categoryRepository.getCategoryById(freshProduct.categoryId)
+            val categorySnapshot = freshProduct.categoryId?.let { categoryRepository.getCategoryById(it) }
 
             if (!freshProduct.active || !freshProduct.available) {
                 throw DomainException("Le produit '${freshProduct.name}' n'est plus disponible.")
@@ -227,12 +227,13 @@ class UpdateOpenOrderUseCase @Inject constructor(
             // Use existing snapshot price if item existed, else use fresh product price
             val existingItem = existingOrder.items.find { it.productId == freshProduct.id }
             val unitPrice = existingItem?.unitPriceSnapshotCentimes ?: freshProduct.priceCentimes
+            val taxRate = existingItem?.tvaRateSnapshot ?: freshProduct.tvaRate
             val calculationLine = SharedOrderLine(
                 productId = freshProduct.id,
                 name = freshProduct.name,
                 unitPriceCentimes = unitPrice,
                 quantity = item.quantity,
-                taxRateBasisPoints = freshProduct.tvaRate.toBasisPoints()
+                taxRateBasisPoints = taxRate.toBasisPoints()
             )
             calculationLines += calculationLine
             val lineTotal = SharedBusinessAdapter.calculateLines(listOf(calculationLine)).totalCentimes
@@ -246,7 +247,7 @@ class UpdateOpenOrderUseCase @Inject constructor(
                     categoryIdSnapshot = existingItem?.categoryIdSnapshot ?: freshProduct.categoryId,
                     categoryNameSnapshot = existingItem?.categoryNameSnapshot ?: categorySnapshot?.name,
                     unitPriceSnapshotCentimes = unitPrice,
-                    tvaRateSnapshot = freshProduct.tvaRate,
+                    tvaRateSnapshot = taxRate,
                     quantity = item.quantity,
                     note = item.note?.trim()?.takeIf { it.isNotBlank() },
                     lineTotalCentimes = lineTotal

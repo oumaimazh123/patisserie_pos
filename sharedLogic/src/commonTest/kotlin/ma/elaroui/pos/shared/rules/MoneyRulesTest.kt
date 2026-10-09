@@ -6,6 +6,14 @@ import kotlin.test.assertIs
 
 class MoneyRulesTest {
     @Test
+    fun oversizedInputReturnsOverflowInsteadOfCrashing() {
+        listOf("9223372036854775808", "9".repeat(200), "92233720368547758.08").forEach {
+            assertEquals(MoneyParseError.OVERFLOW, failure(it).error)
+        }
+        assertMoney("92233720368547758.07", Long.MAX_VALUE)
+    }
+
+    @Test
     fun acceptsCommaDotAndWholeValues() {
         assertMoney("50", 5_000)
         assertMoney("50.5", 5_050)

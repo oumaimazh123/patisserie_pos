@@ -32,7 +32,7 @@ object ProductValidationRules {
         name: String,
         priceCentimes: Long,
         taxRateBasisPoints: Int,
-        categoryActive: Boolean
+        categoryActive: Boolean = true
     ): ProductValidationError? = when {
         name.isBlank() -> ProductValidationError.NAME_REQUIRED
         priceCentimes <= 0 -> ProductValidationError.PRICE_NOT_POSITIVE

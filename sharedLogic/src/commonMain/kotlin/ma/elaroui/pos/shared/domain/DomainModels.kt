@@ -59,7 +59,7 @@ data class RestaurantTable(
 
 data class Product(
     val id: Long,
-    val categoryId: Long,
+    val categoryId: Long? = null,
     val name: String,
     val priceCentimes: Long,
     val taxRateBasisPoints: Int,

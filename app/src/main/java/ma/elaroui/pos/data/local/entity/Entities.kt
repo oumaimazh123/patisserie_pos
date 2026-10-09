@@ -35,7 +35,7 @@ data class CategoryEntity(
             entity = CategoryEntity::class,
             parentColumns = ["id"],
             childColumns = ["categoryId"],
-            onDelete = ForeignKey.CASCADE
+            onDelete = ForeignKey.SET_NULL
         )
     ],
     indices = [
@@ -45,7 +45,7 @@ data class CategoryEntity(
 )
 data class ProductEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val categoryId: Long,
+    val categoryId: Long? = null,
     val name: String,
     val priceCentimes: Long,
     val tvaRate: Double = 0.10,

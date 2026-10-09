@@ -36,7 +36,7 @@ class WindowsPosDatabaseTest {
             assertTrue(db.allUsers().isEmpty())
             assertTrue(db.categories.observeAll().first().isEmpty())
             assertNull(db.settings.get("establishment_name"))
-            assertEquals(10, db.schemaVersion())
+            assertEquals(11, db.schemaVersion())
         }
     }
 
@@ -161,7 +161,7 @@ class WindowsPosDatabaseTest {
             )
 
             db.products.save(product.copy(available = true))
-            val category = db.categories.findById(product.categoryId)!!
+            val category = db.categories.findById(product.categoryId!!)!!
             db.categories.save(category.copy(active = false))
             assertIs<UseCaseResult.Failure>(
                 CreateOrder(db.sessions, db.categories, db.products, db.tables, db.orders)
@@ -426,6 +426,100 @@ class WindowsPosDatabaseTest {
                 assertNotNull(db.categories.findByName("Pains de Seigle"))
                 assertNotNull(db.categories.findByName("Petits Seigles"))
             }
+        }
+    }
+
+    @Test fun uncategorizedProductPersistenceAndOrderValidation() = runBlocking {
+        WindowsPosDatabase.openInMemory().use { db ->
+            val p = Product(id = 0L, categoryId = null, name = "Sac Kraft Emballage", priceCentimes = 50L, taxRateBasisPoints = 0)
+            val id = db.products.save(p)
+            val loaded = db.products.findById(id)
+            assertNotNull(loaded)
+            assertEquals("Sac Kraft Emballage", loaded.name)
+            assertNull(loaded.categoryId)
+
+            // Duplicate name without category should be rejected
+            val dup = Product(id = 0L, categoryId = null, name = "Sac Kraft Emballage", priceCentimes = 100L, taxRateBasisPoints = 0)
+            assertFailsWith<DesktopValidationException> {
+                db.products.save(dup)
+            }
+
+            // Ordering uncategorized product succeeds
+            OpenRegisterSession(db.sessions, TestClock).execute(1, 1, 1, 100_00L)
+            val orderResult = CreateOrder(db.sessions, db.categories, db.products, db.tables, db.orders)
+                .execute(1, "ORD-UNCAT-1", OrderType.COUNTER, 1, listOf(id to 2), null, 1)
+            assertTrue(orderResult is UseCaseResult.Success)
+            val order = (orderResult as UseCaseResult.Success).value
+            assertEquals(1, order.lines.size)
+            assertNull(order.lines.first().categoryIdSnapshot)
+        }
+    }
+
+    @Test fun categoryDeletionNeverDeletesProductsAndMakesThemUncategorized() = runBlocking {
+        WindowsPosDatabase.openInMemory().use { db ->
+            // 1. Create category and products
+            val catId = db.categories.save(Category(0L, "Pâtisseries Orientales", true, 1))
+            val p1Id = db.products.save(Product(0L, catId, "Cornes de Gazelle", 120_00L, 2000))
+            val p2Id = db.products.save(Product(0L, catId, "Briouates aux Amandes", 110_00L, 2000))
+
+            // Verify initial state
+            assertEquals(catId, db.products.findById(p1Id)?.categoryId)
+            assertEquals(catId, db.products.findById(p2Id)?.categoryId)
+
+            // 2. Modify product to be uncategorized directly
+            val p1Modified = db.products.findById(p1Id)!!.copy(categoryId = null, priceCentimes = 125_00L)
+            db.products.save(p1Modified)
+            val p1Loaded = db.products.findById(p1Id)
+            assertNotNull(p1Loaded)
+            assertNull(p1Loaded.categoryId, "Product 1 must now be uncategorized")
+            assertEquals(125_00L, p1Loaded.priceCentimes)
+
+            // 3. Delete category: verify product 2 is NOT deleted and becomes uncategorized
+            db.softDeleteCategory(catId)
+
+            // Category is soft-deleted
+            assertNull(db.categories.findByName("Pâtisseries Orientales"))
+            assertTrue(db.deletedCategories().any { it.id == catId })
+
+            // Products are STILL present and have categoryId = null
+            val p2Loaded = db.products.findById(p2Id)
+            assertNotNull(p2Loaded, "Product 2 must never be deleted when its category is deleted")
+            assertNull(p2Loaded.categoryId, "Product 2 must become uncategorized when its category is deleted")
+            assertTrue(p2Loaded.active, "Product 2 remains active")
+            assertTrue(p2Loaded.available, "Product 2 remains available")
+
+            // Both products are listed in observeSellable() and observeAll()
+            val sellable = db.products.observeSellable().first()
+            assertTrue(sellable.any { it.id == p1Id }, "Product 1 must be sellable")
+            assertTrue(sellable.any { it.id == p2Id }, "Product 2 must be sellable")
+
+            // 4. Products can still be modified while uncategorized
+            db.products.save(p2Loaded.copy(name = "Briouates Miel & Amandes", priceCentimes = 115_00L))
+            val p2Updated = db.products.findById(p2Id)
+            assertNotNull(p2Updated)
+            assertEquals("Briouates Miel & Amandes", p2Updated.name)
+            assertNull(p2Updated.categoryId)
+        }
+    }
+
+    @Test fun existingProductsArePreservedAcrossMigration11() = runBlocking {
+        val path = Files.createTempDirectory("pos-migration11-test").resolve("pos.db")
+        var savedCatId: Long = 0L
+        var savedProdId: Long = 0L
+        WindowsPosDatabase.open(path).use { db ->
+            savedCatId = db.categories.save(Category(0L, "Viennoiserie", true, 1))
+            savedProdId = db.products.save(Product(0L, savedCatId, "Croissant Beurre", 6_00L, 1000, sku = "CRO-01", barcode = "111222"))
+            assertEquals(savedCatId, db.products.findById(savedProdId)?.categoryId)
+        }
+        WindowsPosDatabase.open(path).use { db ->
+            val prod = db.products.findById(savedProdId)
+            assertNotNull(prod)
+            assertEquals("Croissant Beurre", prod.name)
+            assertEquals(savedCatId, prod.categoryId)
+            assertEquals(6_00L, prod.priceCentimes)
+            assertEquals("CRO-01", prod.sku)
+            assertEquals("111222", prod.barcode)
+            assertEquals(11, db.schemaVersion())
         }
     }
 

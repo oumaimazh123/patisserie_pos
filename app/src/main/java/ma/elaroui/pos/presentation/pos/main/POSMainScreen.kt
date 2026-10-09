@@ -44,12 +44,13 @@ fun POSMainScreen(
     onNavigateToSessionDetails: () -> Unit,
     onNavigateToPayment: (Long) -> Unit,
     onLockPos: () -> Unit,
-    onSwitchUser: () -> Unit
+    onSwitchUser: () -> Unit,
+    autoOpenCategoryPicker: Boolean = true
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val adaptive = LocalAdaptiveDimensions.current
     var compactSection by rememberSaveable { mutableIntStateOf(0) }
-    var showCategoryPicker by rememberSaveable { mutableStateOf(false) }
+    var showCategoryPicker by remember { mutableStateOf(autoOpenCategoryPicker) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshPopularCategories()

@@ -31,7 +31,7 @@ class GeneralRetailLinuxWorkflowTest {
     fun freshLinuxStoreHasNoMockDataAndPersistsRetailIdentifiers() = runBlocking {
         val databaseFile = Files.createTempDirectory("general-pos-linux-").resolve("pos.db")
         WindowsPosDatabase.open(databaseFile).use { db ->
-            assertEquals(10, db.schemaVersion())
+            assertEquals(11, db.schemaVersion())
             assertTrue(db.categories.observeAll().first().isEmpty())
             assertTrue(db.products.observeAll().first().isEmpty())
             assertTrue(db.areas().isEmpty())

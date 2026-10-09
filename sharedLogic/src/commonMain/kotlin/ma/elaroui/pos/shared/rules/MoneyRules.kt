@@ -36,7 +36,8 @@ object MoneyRules {
         val wholeText = unsigned.substringBefore('.')
         val fraction = unsigned.substringAfter('.', "")
         return try {
-            val whole = wholeText.toLong()
+            val whole = wholeText.toLongOrNull()
+                ?: return MoneyParseResult.Failure(MoneyParseError.OVERFLOW)
             var centimes = MathRules.addExact(
                 MathRules.multiplyExact(whole, 100L),
                 fraction.padEnd(2, '0').take(2).toLongOrNull() ?: 0L

@@ -15,8 +15,8 @@ data class CategoryTreeNode(
  * Domain rules and validation for Category hierarchy.
  *
  * Rules:
- * - Maximum depth: 3 levels (Level 1 = Root, Level 2 = Subcategory, Level 3 = Sub-subcategory)
- * - A level 3 category CANNOT have children (prevent 4th level).
+ * - Maximum depth: 4 levels (root is level 1).
+ * - A level 4 category cannot have children.
  * - Cycles (direct or indirect) are strictly prohibited.
  */
 object CategoryHierarchyRules {
@@ -50,15 +50,15 @@ object CategoryHierarchyRules {
                 return -1 // Cycle detected
             }
             level++
-            val cat = categoryMap[currentId] ?: break
+            val cat = categoryMap[currentId] ?: return -1
             currentId = cat.parentId
         }
         return level
     }
 
     /**
-     * Returns true if a category is allowed to have children (i.e. currently at Level 1 or Level 2).
-     * Returns false if the category is at Level 3 or higher.
+     * Returns true for existing categories at levels 1 through 3.
+     * Invalid hierarchies and level 4 categories cannot have children.
      */
     fun canCategoryHaveChildren(category: Category, allCategories: List<Category>): Boolean {
         return canCategoryHaveChildren(category.id, allCategories)
@@ -137,6 +137,9 @@ object CategoryHierarchyRules {
         // Check depth
         if (category.parentId != null) {
             val parentLevel = calculateLevel(category.parentId, allCategories)
+            if (parentLevel < 1) {
+                return Result.failure(IllegalArgumentException("Parent category is missing or its hierarchy contains a cycle."))
+            }
             if (parentLevel >= MAX_DEPTH) {
                 return Result.failure(IllegalArgumentException(ERROR_LEVEL_3_CANNOT_HAVE_CHILDREN))
             }

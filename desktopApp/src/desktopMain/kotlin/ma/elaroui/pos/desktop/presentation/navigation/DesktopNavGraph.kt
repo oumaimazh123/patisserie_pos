@@ -677,10 +677,6 @@ class DesktopNavState(
             showWarning(strings.text("Produit désactivé : ${product.name}", "Product deactivated: ${product.name}", "المنتج معطل: ${product.name}"))
             return
         }
-        if (categories.none { it.id == product.categoryId && it.active }) {
-            showWarning(strings.text("Catégorie désactivée : ${product.name}", "Product category is deactivated: ${product.name}", "فئة المنتج معطلة: ${product.name}"))
-            return
-        }
 
         val currentQty = cart[product.id] ?: 0
         val newQty = currentQty + 1
@@ -1375,6 +1371,7 @@ private fun DesktopShell(
                         discountBasisPoints = state.discountBasisPoints,
                         itemDiscountsBasisPoints = state.itemDiscountsBasisPoints,
                         strings = strings,
+                        autoOpenCategoryPicker = true,
                         onProductClicked = { p ->
                             state.cart[p.id] = (state.cart[p.id] ?: 0) + 1
                             state.syncCustomerDisplayCart()

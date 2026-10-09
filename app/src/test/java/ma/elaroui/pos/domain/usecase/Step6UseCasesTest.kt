@@ -9,6 +9,21 @@ import org.junit.Before
 import org.junit.Test
 
 class Step6UseCasesTest {
+    @Test
+    fun editingOrderRetainsOriginalTaxAfterCatalogueChange() = runTest {
+        val original = createOrderUseCase(
+            OrderType.COUNTER, null, listOf(CartItem(product = testProduct1, quantity = 1)),
+            currentUser = cashierUser
+        )
+        productRepository.products[testProduct1.id] = testProduct1.copy(tvaRate = 0.20, priceCentimes = 9900)
+        val updated = updateOpenOrderUseCase(
+            original.id, listOf(CartItem(product = testProduct1, quantity = 2)), currentUser = cashierUser
+        )
+        assertEquals(original.items.single().tvaRateSnapshot, updated.items.single().tvaRateSnapshot, 0.0)
+        assertEquals(original.items.single().unitPriceSnapshotCentimes, updated.items.single().unitPriceSnapshotCentimes)
+        assertEquals(original.totalCentimes * 2, updated.totalCentimes)
+    }
+
 
     private lateinit var categoryRepository: FakeCategoryRepository
     private lateinit var productRepository: FakeProductRepository

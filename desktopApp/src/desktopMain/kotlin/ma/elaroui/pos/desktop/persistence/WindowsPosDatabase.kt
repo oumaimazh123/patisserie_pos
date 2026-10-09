@@ -722,7 +722,20 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                 it.setLong(2, now)
                 it.executeUpdate()
             }
+            val sqlProducts = """
+                WITH RECURSIVE cat_tree(cat_id) AS (
+                    SELECT id FROM categories WHERE id = ?
+                    UNION ALL
+                    SELECT c.id FROM categories c JOIN cat_tree ct ON c.parent_id = ct.cat_id
+                )
+                UPDATE products SET category_id = NULL WHERE category_id IN (SELECT cat_id FROM cat_tree)
+            """.trimIndent()
+            c.prepareStatement(sqlProducts).use {
+                it.setLong(1, id)
+                it.executeUpdate()
+            }
             (categories as? Categories)?.refreshState()
+            (products as? Products)?.refreshState()
         }
     }
 
@@ -2085,6 +2098,49 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                 it.setLong(1, System.currentTimeMillis()); it.executeUpdate()
             }
         }
+        if (11 !in appliedVersions) transactionBlocking {
+            connection.createStatement().use { s ->
+                s.execute("PRAGMA foreign_keys=OFF")
+                s.execute("""
+                    CREATE TABLE products_new(
+                        id INTEGER PRIMARY KEY,
+                        category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+                        name TEXT NOT NULL,
+                        price_centimes INTEGER NOT NULL CHECK(price_centimes>0),
+                        tax_basis_points INTEGER NOT NULL CHECK(tax_basis_points BETWEEN 0 AND 10000),
+                        image_path TEXT,
+                        available INTEGER NOT NULL DEFAULT 1,
+                        active INTEGER NOT NULL DEFAULT 1,
+                        display_order INTEGER NOT NULL DEFAULT 0,
+                        sku TEXT,
+                        barcode TEXT,
+                        name_arabic TEXT,
+                        unit TEXT,
+                        description TEXT,
+                        deleted_at INTEGER DEFAULT NULL
+                    )
+                """.trimIndent())
+                s.execute("""
+                    INSERT INTO products_new(id, category_id, name, price_centimes, tax_basis_points, image_path, available, active, display_order, sku, barcode, name_arabic, unit, description, deleted_at)
+                    SELECT id, category_id, name, price_centimes, tax_basis_points, image_path, available, active, display_order, sku, barcode, name_arabic, unit, description, deleted_at
+                    FROM products
+                """.trimIndent())
+                s.execute("DROP TABLE products")
+                s.execute("ALTER TABLE products_new RENAME TO products")
+                s.execute("DROP INDEX IF EXISTS idx_products_category_active")
+                s.execute("CREATE INDEX IF NOT EXISTS idx_products_category_active ON products(category_id,active,available)")
+                s.execute("DROP INDEX IF EXISTS idx_products_sku")
+                s.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_products_sku ON products(sku) WHERE deleted_at IS NULL AND sku IS NOT NULL AND sku != ''")
+                s.execute("DROP INDEX IF EXISTS idx_products_barcode")
+                s.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode) WHERE deleted_at IS NULL AND barcode IS NOT NULL AND barcode != ''")
+                s.execute("DROP INDEX IF EXISTS idx_products_cat_name")
+                s.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_products_cat_name ON products(IFNULL(category_id, 0), name COLLATE NOCASE) WHERE deleted_at IS NULL")
+                s.execute("PRAGMA foreign_keys=ON")
+            }
+            connection.prepareStatement("INSERT INTO schema_migrations(version,applied_at) VALUES(11,?)").use {
+                it.setLong(1, System.currentTimeMillis()); it.executeUpdate()
+            }
+        }
     }
 
     private fun seedBaseFixturesForTests(): Unit = lock.withLock {
@@ -2221,15 +2277,15 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
     private inner class Products : ProductRepository {
         private val state = MutableStateFlow(load())
         fun refreshState() { state.value = load() }
-        private fun load() = read { c -> c.createStatement().use { s -> s.executeQuery("SELECT id,category_id,name,price_centimes,tax_basis_points,available,active,image_path,sku,barcode,name_arabic,unit,description FROM products WHERE deleted_at IS NULL ORDER BY display_order,name").use { it.map { Product(getLong(1),getLong(2),getString(3),getLong(4),getInt(5),getInt(6)!=0,getInt(7)!=0,getString(8),getString(9),getString(10),getString(11),getString(12),getString(13)) } } } }
-        override suspend fun findById(id: Long) = read { c -> c.prepareStatement("SELECT id,category_id,name,price_centimes,tax_basis_points,available,active,image_path,sku,barcode,name_arabic,unit,description FROM products WHERE id=?").use { it.setLong(1, id); it.executeQuery().use { r -> if (r.next()) Product(r.getLong(1), r.getLong(2), r.getString(3), r.getLong(4), r.getInt(5), r.getInt(6) != 0, r.getInt(7) != 0, r.getString(8), r.getString(9), r.getString(10), r.getString(11), r.getString(12), r.getString(13)) else null } } }
+        private fun load() = read { c -> c.createStatement().use { s -> s.executeQuery("SELECT id,category_id,name,price_centimes,tax_basis_points,available,active,image_path,sku,barcode,name_arabic,unit,description FROM products WHERE deleted_at IS NULL ORDER BY display_order,name").use { it.map { Product(getLong(1),nullLong(2),getString(3),getLong(4),getInt(5),getInt(6)!=0,getInt(7)!=0,getString(8),getString(9),getString(10),getString(11),getString(12),getString(13)) } } } }
+        override suspend fun findById(id: Long) = read { c -> c.prepareStatement("SELECT id,category_id,name,price_centimes,tax_basis_points,available,active,image_path,sku,barcode,name_arabic,unit,description FROM products WHERE id=?").use { it.setLong(1, id); it.executeQuery().use { r -> if (r.next()) Product(r.getLong(1), r.nullLong(2), r.getString(3), r.getLong(4), r.getInt(5), r.getInt(6) != 0, r.getInt(7) != 0, r.getString(8), r.getString(9), r.getString(10), r.getString(11), r.getString(12), r.getString(13)) else null } } }
         fun findByBarcode(barcode: String): Product? = read { c ->
             val clean = barcode.trim()
             if (clean.isBlank()) return@read null
             c.prepareStatement("SELECT id,category_id,name,price_centimes,tax_basis_points,available,active,image_path,sku,barcode,name_arabic,unit,description FROM products WHERE barcode=? AND deleted_at IS NULL").use {
                 it.setString(1, clean)
                 it.executeQuery().use { r ->
-                    if (r.next()) Product(r.getLong(1), r.getLong(2), r.getString(3), r.getLong(4), r.getInt(5), r.getInt(6) != 0, r.getInt(7) != 0, r.getString(8), r.getString(9), r.getString(10), r.getString(11), r.getString(12), r.getString(13)) else null
+                    if (r.next()) Product(r.getLong(1), r.nullLong(2), r.getString(3), r.getLong(4), r.getInt(5), r.getInt(6) != 0, r.getInt(7) != 0, r.getString(8), r.getString(9), r.getString(10), r.getString(11), r.getString(12), r.getString(13)) else null
                 }
             }
         }
@@ -2239,18 +2295,18 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
             c.prepareStatement("SELECT id,category_id,name,price_centimes,tax_basis_points,available,active,image_path,sku,barcode,name_arabic,unit,description FROM products WHERE sku=? AND deleted_at IS NULL").use {
                 it.setString(1, clean)
                 it.executeQuery().use { r ->
-                    if (r.next()) Product(r.getLong(1), r.getLong(2), r.getString(3), r.getLong(4), r.getInt(5), r.getInt(6) != 0, r.getInt(7) != 0, r.getString(8), r.getString(9), r.getString(10), r.getString(11), r.getString(12), r.getString(13)) else null
+                    if (r.next()) Product(r.getLong(1), r.nullLong(2), r.getString(3), r.getLong(4), r.getInt(5), r.getInt(6) != 0, r.getInt(7) != 0, r.getString(8), r.getString(9), r.getString(10), r.getString(11), r.getString(12), r.getString(13)) else null
                 }
             }
         }
         override fun observeSellable(): Flow<List<Product>> = state.map { list -> list.filter { it.active && it.available } }
         override fun observeAll(): Flow<List<Product>> = state
 
-        private fun ensureProductUnique(c: Connection, categoryId: Long, name: String, excludedProductId: Long?, sku: String?, barcode: String?) {
-            val sql = "SELECT 1 FROM products WHERE category_id=? AND name=? COLLATE NOCASE AND deleted_at IS NULL" +
+        private fun ensureProductUnique(c: Connection, categoryId: Long?, name: String, excludedProductId: Long?, sku: String?, barcode: String?) {
+            val sql = "SELECT 1 FROM products WHERE IFNULL(category_id, 0)=IFNULL(?, 0) AND name=? COLLATE NOCASE AND deleted_at IS NULL" +
                 if (excludedProductId == null) "" else " AND id<>?"
             c.prepareStatement(sql).use { statement ->
-                statement.setLong(1, categoryId)
+                if (categoryId != null) statement.setLong(1, categoryId) else statement.setNull(1, java.sql.Types.INTEGER)
                 statement.setString(2, name.trim())
                 excludedProductId?.let { statement.setLong(3, it) }
                 statement.executeQuery().use { if (it.next()) throw DesktopValidationException(DUPLICATE_PRODUCT_MESSAGE) }
@@ -2593,12 +2649,13 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
     }
     private fun upsert(c:Connection,table:String,id:Long,values:List<Pair<String,Any?>>):Long { val columns=listOf("id")+values.map{it.first};val sql="INSERT INTO $table(${columns.joinToString()}) VALUES(${columns.joinToString{ "?" }}) ON CONFLICT(id) DO UPDATE SET ${values.joinToString { "${it.first}=excluded.${it.first}" }}";c.prepareStatement(sql).use { p->p.setLong(1,id);values.forEachIndexed { i,v->p.setObject(i+2,when(val x=v.second){is Boolean->if(x)1 else 0 else->x}) };p.executeUpdate() };return id }
     private fun ResultSet.nullLong(column:String):Long? { val value=getLong(column);return if(wasNull())null else value }
+    private fun ResultSet.nullLong(index:Int):Long? { val value=getLong(index);return if(wasNull())null else value }
     private inline fun <T> ResultSet.map(block:ResultSet.()->T):List<T>{val out=mutableListOf<T>();while(next())out+=block();return out}
 
     private fun schemaV1() = listOf(
         "CREATE TABLE users(id INTEGER PRIMARY KEY,name TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('OWNER','CASHIER')),pin_hash TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,deleted_at INTEGER DEFAULT NULL)",
         "CREATE TABLE categories(id INTEGER PRIMARY KEY,name TEXT NOT NULL COLLATE NOCASE,display_order INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,deleted_at INTEGER DEFAULT NULL)",
-        "CREATE TABLE products(id INTEGER PRIMARY KEY,category_id INTEGER NOT NULL REFERENCES categories(id),name TEXT NOT NULL,price_centimes INTEGER NOT NULL CHECK(price_centimes>0),tax_basis_points INTEGER NOT NULL CHECK(tax_basis_points BETWEEN 0 AND 10000),image_path TEXT,available INTEGER NOT NULL DEFAULT 1,active INTEGER NOT NULL DEFAULT 1,display_order INTEGER NOT NULL DEFAULT 0,sku TEXT,barcode TEXT,deleted_at INTEGER DEFAULT NULL)",
+        "CREATE TABLE products(id INTEGER PRIMARY KEY,category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,name TEXT NOT NULL,price_centimes INTEGER NOT NULL CHECK(price_centimes>0),tax_basis_points INTEGER NOT NULL CHECK(tax_basis_points BETWEEN 0 AND 10000),image_path TEXT,available INTEGER NOT NULL DEFAULT 1,active INTEGER NOT NULL DEFAULT 1,display_order INTEGER NOT NULL DEFAULT 0,sku TEXT,barcode TEXT,deleted_at INTEGER DEFAULT NULL)",
         "CREATE TABLE dining_areas(id INTEGER PRIMARY KEY,name TEXT NOT NULL COLLATE NOCASE,display_order INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,image_path TEXT,deleted_at INTEGER DEFAULT NULL)",
         "CREATE TABLE restaurant_tables(id INTEGER PRIMARY KEY,area_id INTEGER NOT NULL REFERENCES dining_areas(id),name TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('AVAILABLE','RESERVED','OCCUPIED')),active INTEGER NOT NULL DEFAULT 1,display_order INTEGER NOT NULL DEFAULT 0,deleted_at INTEGER DEFAULT NULL)",
         "CREATE TABLE registers(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE,active INTEGER NOT NULL DEFAULT 1)",
@@ -2613,7 +2670,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         "CREATE INDEX idx_products_category_active ON products(category_id,active,available)",
         "CREATE UNIQUE INDEX idx_products_sku ON products(sku) WHERE deleted_at IS NULL AND sku IS NOT NULL AND sku != ''",
         "CREATE UNIQUE INDEX idx_products_barcode ON products(barcode) WHERE deleted_at IS NULL AND barcode IS NOT NULL AND barcode != ''",
-        "CREATE UNIQUE INDEX idx_products_cat_name ON products(category_id, name COLLATE NOCASE) WHERE deleted_at IS NULL",
+        "CREATE UNIQUE INDEX idx_products_cat_name ON products(IFNULL(category_id, 0), name COLLATE NOCASE) WHERE deleted_at IS NULL",
         "CREATE UNIQUE INDEX idx_categories_name ON categories(name COLLATE NOCASE) WHERE deleted_at IS NULL",
         "CREATE UNIQUE INDEX idx_users_pin ON users(pin_hash) WHERE deleted_at IS NULL",
         "CREATE UNIQUE INDEX idx_dining_areas_name ON dining_areas(name COLLATE NOCASE) WHERE deleted_at IS NULL",

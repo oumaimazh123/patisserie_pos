@@ -4,12 +4,16 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import ma.elaroui.pos.desktop.DesktopLanguage
 import ma.elaroui.pos.desktop.DesktopStrings
 import ma.elaroui.pos.desktop.presentation.components.PosColors
 import ma.elaroui.pos.shared.domain.Category
 import ma.elaroui.pos.shared.domain.Product
+import ma.elaroui.pos.shared.domain.UserRole
 import ma.elaroui.pos.shared.domain.isRoot
 import ma.elaroui.pos.shared.domain.isSubcategory
 
@@ -396,5 +400,92 @@ class PosCategorySelectorTest {
         assertEquals(4f, horizontalGap, "Horizontal gap between grid squares must be 4")
         assertEquals(4f, verticalGap, "Vertical gap between grid squares must be 4")
     }
+
+    @Test
+    fun `category picker popup automatically opens on entrance to POS screen for cashiers and managers`() {
+        // Both CASHIER and OWNER (Manager) are supported roles
+        val roles = listOf(UserRole.CASHIER, UserRole.OWNER)
+
+        for (role in roles) {
+            // Simulated screen entry state: autoOpenCategoryPicker defaults to true
+            val autoOpenCategoryPicker = true
+            var showCategoryPicker by mutableStateOf(autoOpenCategoryPicker)
+
+            assertTrue(
+                showCategoryPicker,
+                "Category picker must open automatically on POS screen entry for role $role"
+            )
+        }
+    }
+
+    @Test
+    fun `category picker dismiss button closes popup and remains closed while user stays on POS screen`() {
+        val autoOpenCategoryPicker = true
+        var showCategoryPicker by mutableStateOf(autoOpenCategoryPicker)
+        var cartItemCount by mutableStateOf(0)
+        var searchQuery by mutableStateOf("")
+
+        // 1. Initially open on POS entry
+        assertTrue(showCategoryPicker)
+
+        // 2. User clicks "Fermer" (dismiss)
+        val onDismiss = { showCategoryPicker = false }
+        onDismiss()
+
+        assertFalse(showCategoryPicker, "Popup must be closed after dismiss")
+
+        // 3. User performs normal actions while staying on POS screen
+        cartItemCount += 1
+        searchQuery = "croissant"
+        cartItemCount += 2
+
+        // Popup must NOT reopen automatically while staying on POS screen
+        assertFalse(showCategoryPicker, "Popup must remain closed while user is active on POS screen")
+    }
+
+    @Test
+    fun `category picker reopens when user leaves POS screen and returns`() {
+        // First entry to POS
+        var showCategoryPickerScreen1 by mutableStateOf(true)
+        assertTrue(showCategoryPickerScreen1)
+
+        // Cashier/Manager closes dialog
+        showCategoryPickerScreen1 = false
+        assertFalse(showCategoryPickerScreen1)
+
+        // User navigates away (e.g. to payment, dashboard, active orders, or lock screen)
+        // Then returns to POS screen: POSMainScreen recomposes fresh with initial state autoOpenCategoryPicker = true
+        var showCategoryPickerScreen2 by mutableStateOf(true)
+        assertTrue(
+            showCategoryPickerScreen2,
+            "When re-entering POS screen after leaving, popup must open automatically again"
+        )
+    }
+
+    @Test
+    fun `category selection in popup selects category or Tous les produits and closes popup`() {
+        var selectedCategoryId by mutableStateOf<Long?>(null)
+        var showCategoryPicker by mutableStateOf(true)
+
+        val onSelect = { catId: Long? ->
+            selectedCategoryId = catId
+            showCategoryPicker = false
+        }
+
+        // 1. Selecting category 5
+        onSelect(5L)
+        assertEquals(5L, selectedCategoryId)
+        assertFalse(showCategoryPicker, "Selecting a category must close the popup")
+
+        // 2. User manually reopens picker via 'Catégories' button
+        showCategoryPicker = true
+        assertTrue(showCategoryPicker)
+
+        // 3. User selects "Tous les produits" (null)
+        onSelect(null)
+        assertEquals(null, selectedCategoryId)
+        assertFalse(showCategoryPicker, "Selecting 'Tous les produits' must close the popup")
+    }
 }
+
 

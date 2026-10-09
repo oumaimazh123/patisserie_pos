@@ -5,6 +5,7 @@ import ma.elaroui.pos.shared.LogEntry
 import ma.elaroui.pos.shared.PlatformLogger
 import ma.elaroui.pos.shared.domain.*
 import kotlin.test.*
+import org.junit.Assume.assumeTrue
 
 class RealOsVirtualPrinterIntegrationTest {
 
@@ -50,6 +51,7 @@ class RealOsVirtualPrinterIntegrationTest {
                 val executor = ProcessBuilderCommandExecutor()
                 val lpstatCheck = executor.execute(listOf("which", "lp"), null, 2_000L)
                 if (!lpstatCheck.successful) {
+                    assumeTrue("CUPS lp utility is unavailable", false)
                     println("CUPS 'lp' utility is not installed on this host. Skipping Linux OS spooler test.")
                     return
                 }
@@ -57,6 +59,7 @@ class RealOsVirtualPrinterIntegrationTest {
                 val queuesCheck = executor.execute(listOf("lpstat", "-p"), null, 2_000L)
                 val posClientConfigured = queuesCheck.successful && queuesCheck.standardOutput.contains("POS_CLIENT")
                 if (!posClientConfigured) {
+                    assumeTrue("CUPS POS_CLIENT queue is unavailable", false)
                     println("Virtual printer queue 'POS_CLIENT' not found in CUPS. Skipping live CUPS print.")
                     return
                 }
@@ -88,6 +91,7 @@ class RealOsVirtualPrinterIntegrationTest {
                 val found = discovery.printers.any { it.name.equals(targetPrinterName, ignoreCase = true) }
 
                 if (!found) {
+                    assumeTrue("Windows virtual thermal printer is unavailable", false)
                     println("Windows virtual printer '$targetPrinterName' not installed on this host. Skipping live Windows spooler print.")
                     return
                 }
@@ -112,6 +116,7 @@ class RealOsVirtualPrinterIntegrationTest {
             }
 
             else -> {
+                assumeTrue("No spooler integration for this platform", false)
                 println("Platform $platform does not have a live spooler integration test.")
             }
         }

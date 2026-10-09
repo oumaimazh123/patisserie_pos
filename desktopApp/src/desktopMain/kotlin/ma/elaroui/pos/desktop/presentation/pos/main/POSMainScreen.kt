@@ -91,6 +91,7 @@ fun POSMainScreen(
     discountBasisPoints: Int,
     itemDiscountsBasisPoints: Map<Long, Int> = emptyMap(),
     strings: DesktopStrings,
+    autoOpenCategoryPicker: Boolean = true,
     onProductClicked: (Product) -> Unit,
     onQuantityChanged: (productId: Long, quantity: Int) -> Unit,
     onDiscountChanged: (basisPoints: Int) -> Unit,
@@ -105,7 +106,7 @@ fun POSMainScreen(
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategoryId by remember { mutableStateOf<Long?>(null) }
-    var showCategoryPicker by remember { mutableStateOf(false) }
+    var showCategoryPicker by remember { mutableStateOf(autoOpenCategoryPicker) }
     var pickerInitialParentId by remember { mutableStateOf<Long?>(null) }
     var showClearCartConfirmDialog by remember { mutableStateOf(false) }
 
@@ -784,11 +785,12 @@ internal fun filterDesktopPosProducts(
     val normalizedQuery = searchQuery.trim()
     val filtered = products.filter { product ->
         val matchesCategory = if (allowedCategoryIds != null) {
-            product.categoryId in allowedCategoryIds
+            product.categoryId != null && product.categoryId in allowedCategoryIds
         } else {
             selectedCategoryId == null || product.categoryId == selectedCategoryId
         }
-        product.active && product.available && product.categoryId in activeCategoryIds &&
+        val isCategoryValid = product.categoryId == null || product.categoryId in activeCategoryIds || selectedCategoryId == null
+        product.active && product.available && isCategoryValid &&
             (normalizedQuery.isNotEmpty() || matchesCategory) &&
             (
                 normalizedQuery.isEmpty() ||

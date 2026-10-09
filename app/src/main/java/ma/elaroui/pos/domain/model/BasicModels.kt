@@ -20,7 +20,7 @@ data class Category(
 
 data class Product(
     val id: Long = 0,
-    val categoryId: Long,
+    val categoryId: Long? = null,
     val name: String,
     val priceCentimes: Long,
     val tvaRate: Double = 0.10,

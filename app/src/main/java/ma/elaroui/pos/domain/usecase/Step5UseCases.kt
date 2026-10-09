@@ -262,14 +262,16 @@ class ActivateProductUseCase @Inject constructor(
         ensureOwner(currentUser)
         val product = productRepository.getProductById(productId)
             ?: throw DomainException("Produit introuvable.")
-        val category = categoryRepository.getCategoryById(product.categoryId)
-            ?: throw DomainException("Catégorie introuvable.")
-        if (!category.active) {
-            throw DomainException("Réactivez d'abord la catégorie '${category.name}'.")
-        }
-        val duplicate = productRepository.getProductByNameInCategory(product.categoryId, product.name)
-        if (duplicate != null && duplicate.id != productId) {
-            throw DomainException("Un autre produit nommé '${product.name}' existe déjà dans cette catégorie.")
+        if (product.categoryId != null) {
+            val category = categoryRepository.getCategoryById(product.categoryId)
+                ?: throw DomainException("Catégorie introuvable.")
+            if (!category.active) {
+                throw DomainException("Réactivez d'abord la catégorie '${category.name}'.")
+            }
+            val duplicate = productRepository.getProductByNameInCategory(product.categoryId, product.name)
+            if (duplicate != null && duplicate.id != productId) {
+                throw DomainException("Un autre produit nommé '${product.name}' existe déjà dans cette catégorie.")
+            }
         }
         productRepository.activateProduct(productId)
     }

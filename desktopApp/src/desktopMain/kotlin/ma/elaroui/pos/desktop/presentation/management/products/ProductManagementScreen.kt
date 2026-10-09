@@ -113,7 +113,7 @@ fun ProductManagementScreen(
 
     val filteredProducts = remember(products, allowedCategoryIds, normalizedQuery, categoryMap, selectedStatusFilter) {
         products.filter { p ->
-            val matchesCategory = allowedCategoryIds == null || p.categoryId in allowedCategoryIds
+            val matchesCategory = allowedCategoryIds == null || (p.categoryId != null && p.categoryId in allowedCategoryIds)
             if (!matchesCategory) return@filter false
             val matchesStatus = when (selectedStatusFilter) {
                 "ACTIVE" -> p.active
@@ -122,7 +122,7 @@ fun ProductManagementScreen(
             }
             if (!matchesStatus) return@filter false
             if (normalizedQuery.isBlank()) return@filter true
-            val catName = categoryMap[p.categoryId]?.name.orEmpty()
+            val catName = p.categoryId?.let { categoryMap[it]?.name }.orEmpty()
             normalizeForSearch(p.name).contains(normalizedQuery) ||
                 normalizeForSearch(catName).contains(normalizedQuery) ||
                 normalizeForSearch(p.sku.orEmpty()).contains(normalizedQuery) ||
@@ -737,14 +737,10 @@ fun ProductManagementScreen(
                         productCategoryError = null
                         productImageError = null
 
-                        val cid = categoryIdInput ?: categories.firstOrNull { it.active }?.id
+                        val cid = categoryIdInput
                         var hasError = false
                         if (nameInput.isBlank()) {
                             productNameError = strings.required
-                            hasError = true
-                        }
-                        if (cid == null) {
-                            productCategoryError = strings.text("Sélectionnez une catégorie", "Select a category", "اختر فئة")
                             hasError = true
                         }
                         if (parsedPrice == null || parsedPrice <= 0) {
@@ -755,7 +751,7 @@ fun ProductManagementScreen(
 
                         val p = Product(
                             id = editingProduct?.id ?: 0L,
-                            categoryId = cid!!,
+                            categoryId = cid,
                             name = nameInput.trim(),
                             priceCentimes = parsedPrice!!,
                             taxRateBasisPoints = taxRateInput,
@@ -1574,7 +1570,7 @@ private fun DialogCategoryDropdownSelector(
                 ) {
                     Text("📁", fontSize = 15.sp)
                     Text(
-                        text = selectedDisplayName ?: strings.text("Toutes les catégories", "All categories", "جميع الفئات"),
+                        text = selectedDisplayName ?: strings.text("Sans catégorie", "No category", "بدون فئة"),
                         fontSize = 13.sp,
                         fontWeight = if (selectedDisplayName != null) FontWeight.SemiBold else FontWeight.Medium,
                         color = PosColors.TextHigh,
@@ -1688,7 +1684,7 @@ private fun DialogCategoryDropdownSelector(
                         ) {
                             Text("🏷️", fontSize = 13.sp)
                             Text(
-                                text = strings.text("Toutes les catégories", "All categories", "جميع الفئات"),
+                                text = strings.text("Sans catégorie (Aucune)", "No category (None)", "بدون فئة (لا يوجد)"),
                                 fontSize = 13.sp,
                                 fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.SemiBold,
                                 color = if (isAllSelected) PosColors.PrimaryDark else PosColors.TextHigh

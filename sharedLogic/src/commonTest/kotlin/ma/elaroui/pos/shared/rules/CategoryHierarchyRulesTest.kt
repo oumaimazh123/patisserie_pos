@@ -7,6 +7,18 @@ import kotlin.test.assertTrue
 import ma.elaroui.pos.shared.domain.Category
 
 class CategoryHierarchyRulesTest {
+    @Test
+    fun missingParentAndCyclicParentChainAreRejected() {
+        val child = Category(id = 0, name = "Child", parentId = 999)
+        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(child, emptyList()).isFailure)
+        assertFalse(CategoryHierarchyRules.canCategoryHaveChildren(999, emptyList()))
+        val cycle = listOf(
+            Category(id = 1, name = "A", parentId = 2),
+            Category(id = 2, name = "B", parentId = 1)
+        )
+        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(child.copy(parentId = 1), cycle).isFailure)
+    }
+
 
     // Cas 1: Créer Pâtisserie (Niveau 1)
     @Test

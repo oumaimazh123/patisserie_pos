@@ -16,7 +16,7 @@ class POSProductFilterTest {
 
     private fun product(
         id: Long,
-        categoryId: Long,
+        categoryId: Long?,
         name: String,
         sku: String? = null,
         barcode: String? = null,
@@ -202,5 +202,33 @@ class POSProductFilterTest {
         // prod 1 should rank higher than prod 2 because of the recency multiplier
         assertEquals(1L, result[0].id, "Recent sales give higher score (prod 1: 5*4=20 vs prod 2: 12*1=12)")
         assertEquals(2L, result[1].id)
+    }
+
+    @Test
+    fun uncategorizedProduct_showsInAllProductsAndSearch() {
+        val uncategorizedProd = product(99L, null, "Sac Emballage")
+        val allProds = products + uncategorizedProd
+
+        val inAll = filterDesktopPosProducts(allProds, activeCategoryIds, null, "")
+        assertTrue(inAll.any { it.id == 99L }, "Uncategorized product must appear under All Products")
+
+        val inCat = filterDesktopPosProducts(allProds, activeCategoryIds, catA, "")
+        assertFalse(inCat.any { it.id == 99L }, "Uncategorized product must not appear under a specific category tab")
+
+        val inSearch = filterDesktopPosProducts(allProds, activeCategoryIds, catA, "Emballage")
+        assertTrue(inSearch.any { it.id == 99L }, "Uncategorized product must be findable via search")
+    }
+
+    @Test
+    fun productWithInactiveOrDeletedCategory_showsInAllProducts() {
+        // catC is inactive / deleted category
+        val activeProdInDeletedCat = product(88L, catC, "Article Rayon Supprimé")
+        val allProds = products + activeProdInDeletedCat
+
+        val inAll = filterDesktopPosProducts(allProds, activeCategoryIds, null, "")
+        assertTrue(inAll.any { it.id == 88L }, "Product whose category was deleted must be listed under All Products")
+
+        val inCat = filterDesktopPosProducts(allProds, activeCategoryIds, catA, "")
+        assertFalse(inCat.any { it.id == 88L }, "Product of deleted category must not appear in other active category tabs")
     }
 }

@@ -6,9 +6,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$releaseVersion = (Get-Content (Join-Path $projectRoot "gradle.properties") | Where-Object { $_ -match "^pos\.desktop\.version=(.+)$" } | ForEach-Object { $Matches[1] }).Trim()
 $artifacts = @(
-    (Join-Path $projectRoot "desktopApp\build\compose\binaries\main\exe\PATISSERIE_POS-1.2.5.exe"),
-    (Join-Path $projectRoot "desktopApp\build\compose\binaries\main\msi\PATISSERIE_POS-1.2.5.msi")
+    (Join-Path $projectRoot "desktopApp\build\compose\binaries\main\exe\PATISSERIE_POS-$releaseVersion.exe"),
+    (Join-Path $projectRoot "desktopApp\build\compose\binaries\main\msi\PATISSERIE_POS-$releaseVersion.msi")
 )
 
 if (-not (Test-Path -LiteralPath $CertificatePath -PathType Leaf)) {

@@ -51,7 +51,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb libgl1 libfontconfig1 cups cups-client
-          sudo service cups start
+          echo "FileDevice Yes" | sudo tee -a /etc/cups/cups-files.conf
+          sudo service cups restart
           sudo touch /tmp/virtual_thermal_pos.bin && sudo chmod 666 /tmp/virtual_thermal_pos.bin
           sudo lpadmin -p POS_CLIENT -E -v file:/tmp/virtual_thermal_pos.bin -m raw
           sudo cupsenable POS_CLIENT

@@ -68,10 +68,17 @@ import ma.elaroui.pos.desktop.presentation.sales.CompletedSalesScreen
 import ma.elaroui.pos.desktop.presentation.sales.ReceiptPreviewScreen
 import ma.elaroui.pos.desktop.presentation.sales.SaleDetailScreen
 import ma.elaroui.pos.desktop.presentation.settings.BackupRestoreScreen
+import ma.elaroui.pos.desktop.presentation.settings.CustomerDisplaySettingsScreen
 import ma.elaroui.pos.desktop.presentation.settings.DataManagementScreen
 import ma.elaroui.pos.desktop.presentation.settings.PrinterSettingsScreen
 import ma.elaroui.pos.desktop.presentation.settings.SettingsScreen
 import ma.elaroui.pos.desktop.presentation.setup.SetupScreen
+import ma.elaroui.pos.desktop.display.CustomerDisplaySettingsRepository
+import ma.elaroui.pos.desktop.display.DesktopSerialVfdTransport
+import ma.elaroui.pos.shared.display.CustomerDisplayController
+import ma.elaroui.pos.shared.display.VfdTransport
+import ma.elaroui.pos.shared.domain.OrderLine
+import ma.elaroui.pos.shared.rules.OrderCalculationRules
 import ma.elaroui.pos.shared.Clock
 import ma.elaroui.pos.shared.EpochMilliseconds
 import ma.elaroui.pos.shared.rules.MoneyRules
@@ -85,7 +92,8 @@ import ma.elaroui.pos.shared.rules.SessionReportType
 enum class DesktopScreenRoute {
     SETUP, LICENSE_GATE, USER_SELECTION, DASHBOARD, POS_MAIN, ACTIVE_ORDERS, PAYMENT, RECEIPT_PREVIEW,
     OPEN_REGISTER, CURRENT_SESSION, CLOSE_REGISTER, REGISTER_HISTORY, PRODUCT_MGMT, CATALOGUE_PREVIEW,
-    CATEGORY_MGMT, TABLE_MGMT, CASHIER_MGMT, DAILY_REPORT, COMPLETED_SALES, SALE_DETAIL, SETTINGS, PRINTER_SETTINGS, BACKUP_RESTORE, DATA_MANAGEMENT
+    CATEGORY_MGMT, TABLE_MGMT, CASHIER_MGMT, DAILY_REPORT, COMPLETED_SALES, SALE_DETAIL, SETTINGS, PRINTER_SETTINGS,
+    CUSTOMER_DISPLAY_SETTINGS, BACKUP_RESTORE, DATA_MANAGEMENT
 }
 
 fun isOwnerRoute(route: DesktopScreenRoute): Boolean = when (route) {
@@ -101,6 +109,7 @@ fun isOwnerRoute(route: DesktopScreenRoute): Boolean = when (route) {
     DesktopScreenRoute.REGISTER_HISTORY,
     DesktopScreenRoute.SETTINGS,
     DesktopScreenRoute.PRINTER_SETTINGS,
+    DesktopScreenRoute.CUSTOMER_DISPLAY_SETTINGS,
     DesktopScreenRoute.BACKUP_RESTORE,
     DesktopScreenRoute.DATA_MANAGEMENT,
     DesktopScreenRoute.LICENSE_GATE -> true
@@ -128,10 +137,16 @@ data class CompletedSaleConfirmation(
 class DesktopNavState(
     val db: WindowsPosDatabase,
     val dataDir: Path,
-    val printerServiceOverride: PrinterService? = null
+    val printerServiceOverride: PrinterService? = null,
+    val vfdTransportOverride: VfdTransport? = null
 ) {
     private val printerLogger = ma.elaroui.pos.desktop.JvmPlatformLogger()
     val printerService = printerServiceOverride ?: DesktopPrinterServiceFactory.create(logger = printerLogger)
+    val customerDisplayTransport = vfdTransportOverride ?: DesktopSerialVfdTransport()
+    val customerDisplayController = CustomerDisplayController(
+        initialConfig = runBlocking { CustomerDisplaySettingsRepository.loadConfig(db.settings) },
+        transport = customerDisplayTransport
+    )
     private val escPosFormatter = EscPosFormatterFactory.create()
     private val automaticPrintGuard = PrintJobDeduplicator()
     private val closingSessionLock = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -142,6 +157,32 @@ class DesktopNavState(
     var uiMessage by mutableStateOf<UiMessage?>(null)
     var language by mutableStateOf(DesktopLanguage.from(runBlocking { db.settings.get("selected_language") }))
     val strings get() = DesktopStrings(language)
+
+    fun getCartTotalCentimes(): Long {
+        if (cart.isEmpty()) return 0L
+        val lines = cart.mapNotNull { (productId, qty) ->
+            if (qty <= 0) return@mapNotNull null
+            val product = products.firstOrNull { it.id == productId } ?: return@mapNotNull null
+            OrderLine(
+                productId = product.id,
+                name = product.name,
+                unitPriceCentimes = product.priceCentimes,
+                quantity = qty,
+                taxRateBasisPoints = product.taxRateBasisPoints
+            )
+        }
+        if (lines.isEmpty()) return 0L
+        return OrderCalculationRules.calculate(lines, discountBasisPoints, itemDiscountsBasisPoints.toMap()).totalCentimes
+    }
+
+    fun syncCustomerDisplayCart() {
+        val total = getCartTotalCentimes()
+        if (cart.isEmpty() || total <= 0L) {
+            customerDisplayController.showIdle()
+        } else {
+            customerDisplayController.updateCart(total)
+        }
+    }
 
     fun showSuccess(text: String, presentation: MessagePresentation = MessagePresentation.TEMPORARY) {
         uiMessage = UiMessage.success(text, presentation)
@@ -323,6 +364,7 @@ class DesktopNavState(
         cart.clear()
         itemDiscountsBasisPoints.clear()
         discountBasisPoints = 0
+        customerDisplayController.showIdle()
         currentRoute = DesktopScreenRoute.SETUP
         clearMessage()
         refresh()
@@ -336,6 +378,7 @@ class DesktopNavState(
         selectedSaleRow = null
         tableId = null
         discountBasisPoints = 0
+        customerDisplayController.showIdle()
         val currentUserId = currentUser?.id
         if (currentUserId != null && currentUserId != 1L) {
             val userStillExists = runBlocking { db.allUsers().any { it.id == currentUserId } }
@@ -450,6 +493,7 @@ class DesktopNavState(
         itemDiscountsBasisPoints.clear()
         pendingOrder = null
         editingOrderId = null
+        customerDisplayController.showIdle()
         navigateTo(DesktopScreenRoute.USER_SELECTION)
     }
 
@@ -580,8 +624,10 @@ class DesktopNavState(
             discountBasisPoints = 0
             if (proceedToPayment) {
                 clearMessage()
+                customerDisplayController.paymentStarted(created.totalCentimes)
             } else {
                 showSuccess(strings.text("Vente mise en attente", "Sale held", "تم تعليق البيع"))
+                customerDisplayController.showIdle()
             }
             currentRoute = if (proceedToPayment) DesktopScreenRoute.PAYMENT else DesktopScreenRoute.POS_MAIN
             refresh()
@@ -607,6 +653,7 @@ class DesktopNavState(
         pendingOrder = null
         clearMessage()
         currentRoute = DesktopScreenRoute.POS_MAIN
+        syncCustomerDisplayCart()
     }
 
     fun onBarcodeScanned(rawBarcode: String) {
@@ -638,6 +685,7 @@ class DesktopNavState(
         val currentQty = cart[product.id] ?: 0
         val newQty = currentQty + 1
         cart[product.id] = newQty
+        syncCustomerDisplayCart()
         showInfo(strings.text("${product.name} ajouté ($newQty)", "${product.name} added ($newQty)", "تمت إضافة ${product.name} ($newQty)"))
     }
 
@@ -664,6 +712,7 @@ class DesktopNavState(
                 changeCentimes = payment.changeCentimes
             )
             cart.clear()
+            customerDisplayController.paymentCompleted()
             showSuccess(strings.saleCompletedSuccess)
             currentRoute = DesktopScreenRoute.POS_MAIN
             refresh()
@@ -673,7 +722,7 @@ class DesktopNavState(
         }
     }
 
-    fun printCompletedSaleReceipt(confirmation: CompletedSaleConfirmation) = runBlocking {
+    fun printCompletedSaleReceipt(confirmation: CompletedSaleConfirmation): PrintResult = runBlocking {
         val company = getCompany()
         val customer = getEffectiveCustomerPrinter()
         val width = db.settings.get("printer_width")?.toIntOrNull() ?: 80
@@ -681,15 +730,21 @@ class DesktopNavState(
         val area = table?.let { selected -> areas.firstOrNull { it.id == selected.areaId } }
 
         if (customer.isBlank()) {
-            showError(strings.text(
+            val errorMsg = strings.text(
                 "Aucune imprimante connectée trouvée.",
                 "No connected printer found.",
                 "لم يتم العثور على طابعة متصلة."
-            ))
-            return@runBlocking
+            )
+            showError(errorMsg)
+            return@runBlocking PrintResult(
+                success = false,
+                message = errorMsg,
+                errorMessage = errorMsg,
+                errorCategory = PrintErrorCategory.NOT_CONFIGURED
+            )
         }
 
-        val printKey = "receipt:${confirmation.order.id}:${confirmation.payment.id}:${System.currentTimeMillis()}"
+        val printKey = "receipt:${confirmation.order.id}:${confirmation.payment.id}"
         val printResult = submitAutomaticDocument(
             key = printKey,
             printerName = customer,
@@ -709,10 +764,11 @@ class DesktopNavState(
             )
         )
         if (!printResult.success) {
+            val err = printResult.errorMessage ?: printResult.message
             showError(strings.text(
-                "Erreur d'impression : ${printResult.errorMessage}",
-                "Print error: ${printResult.errorMessage}",
-                "خطأ في الطباعة: ${printResult.errorMessage}"
+                "Erreur d'impression : $err",
+                "Print error: $err",
+                "خطأ في الطباعة: $err"
             ))
         } else {
             showSuccess(strings.text(
@@ -721,6 +777,7 @@ class DesktopNavState(
                 "تم إرسال الإيصال إلى الطابعة بنجاح"
             ))
         }
+        printResult
     }
 
     fun openRegister(value: Long) = runBlocking {
@@ -749,11 +806,21 @@ class DesktopNavState(
                 .execute(open.id, closingWithUser)
             if (result is UseCaseResult.Success) {
                 val closedSession = result.value
-                val shouldPrint = SessionClosingReportRules.isAutoPrintEnabled(
+                val isAutoEnabled = SessionClosingReportRules.isAutoPrintEnabled(
                     db.settings.get(SESSION_CLOSING_REPORT_SETTING)
-                ) && (getEffectiveCustomerPrinter().isNotBlank() || printerServiceOverride != null)
-                val printResult = if (shouldPrint) {
-                    printSessionClosingReport(closedSession.id, type = SessionReportType.SUMMARY, isReprint = false, automatic = true)
+                )
+                val printResult = if (isAutoEnabled) {
+                    val printer = getEffectiveCustomerPrinter()
+                    if (printer.isBlank() && printerServiceOverride == null) {
+                        PrintResult(
+                            false,
+                            strings.text("Aucune imprimante connectée", "No connected printer", "لا توجد طابعة متصلة"),
+                            strings.text("Aucune imprimante thermique détectée sous Windows", "No thermal printer detected in Windows", "لم يتم العثور على طابعة حرارية في ويندوز"),
+                            PrintErrorCategory.OFFLINE
+                        )
+                    } else {
+                        printSessionClosingReport(closedSession.id, type = SessionReportType.SUMMARY, isReprint = false, automatic = true)
+                    }
                 } else null
                 lock()
                 if (printResult != null && !printResult.success) {
@@ -1113,6 +1180,12 @@ fun DesktopNavGraph(
         WindowsLicenseStatus.CLOCK_ROLLBACK
     )
 
+    DisposableEffect(state) {
+        onDispose {
+            state.customerDisplayController.shutdown()
+        }
+    }
+
     CompositionLocalProvider(
         LocalLayoutDirection provides if (state.language.rtl) LayoutDirection.Rtl else LayoutDirection.Ltr
     ) {
@@ -1312,7 +1385,10 @@ private fun DesktopShell(
                         discountBasisPoints = state.discountBasisPoints,
                         itemDiscountsBasisPoints = state.itemDiscountsBasisPoints,
                         strings = strings,
-                        onProductClicked = { p -> state.cart[p.id] = (state.cart[p.id] ?: 0) + 1 },
+                        onProductClicked = { p ->
+                            state.cart[p.id] = (state.cart[p.id] ?: 0) + 1
+                            state.syncCustomerDisplayCart()
+                        },
                         onQuantityChanged = { pid, q ->
                             if (q <= 0) {
                                 state.cart.remove(pid)
@@ -1320,17 +1396,29 @@ private fun DesktopShell(
                             } else {
                                 state.cart[pid] = q
                             }
+                            state.syncCustomerDisplayCart()
                         },
-                        onDiscountChanged = { state.discountBasisPoints = it.coerceIn(0, 10_000) },
+                        onDiscountChanged = {
+                            state.discountBasisPoints = it.coerceIn(0, 10_000)
+                            state.syncCustomerDisplayCart()
+                        },
                         onItemDiscountChanged = { pid, bps ->
                             if (bps <= 0) {
                                 state.itemDiscountsBasisPoints.remove(pid)
                             } else {
                                 state.itemDiscountsBasisPoints[pid] = bps.coerceIn(0, 10_000)
                             }
+                            state.syncCustomerDisplayCart()
                         },
                         onHoldOrder = { state.holdOrder() },
                         onProceedToPayment = { state.createOrder() },
+                        onClearCart = {
+                            state.cart.clear()
+                            state.itemDiscountsBasisPoints.clear()
+                            state.editingOrderId = null
+                            state.discountBasisPoints = 0
+                            state.syncCustomerDisplayCart()
+                        },
                         onBarcodeScanned = { barcode -> state.onBarcodeScanned(barcode) },
                         message = state.message,
                         uiMessage = state.uiMessage,
@@ -1357,11 +1445,31 @@ private fun DesktopShell(
                 }
                 DesktopScreenRoute.PAYMENT -> {
                     state.pendingOrder?.let { order ->
+                        LaunchedEffect(order.id) {
+                            state.customerDisplayController.paymentStarted(order.totalCentimes)
+                        }
                         PaymentScreen(
                             order = order,
                             strings = strings,
                             onPaymentSubmitted = { m, r -> state.pay(m, r) },
-                            onBack = { state.navigateTo(DesktopScreenRoute.POS_MAIN) },
+                            onBack = {
+                                state.navigateTo(DesktopScreenRoute.POS_MAIN)
+                                state.syncCustomerDisplayCart()
+                            },
+                            onCashAmountChanged = { received, _ ->
+                                if (received != null && received > 0L) {
+                                    state.customerDisplayController.cashReceived(received, order.totalCentimes)
+                                } else {
+                                    state.customerDisplayController.paymentStarted(order.totalCentimes)
+                                }
+                            },
+                            onPaymentMethodChanged = { method ->
+                                if (method == PaymentMethod.CARD) {
+                                    state.customerDisplayController.nonCashPaymentSelected("CARTE / TPE", order.totalCentimes)
+                                } else {
+                                    state.customerDisplayController.paymentStarted(order.totalCentimes)
+                                }
+                            },
                             message = state.message,
                             uiMessage = state.uiMessage,
                             onClearMessage = { state.clearMessage() }
@@ -1798,10 +1906,28 @@ private fun DesktopShell(
                             state.invalidateCompany()
                         },
                         onNavigateToPrinterSettings = { state.navigateTo(DesktopScreenRoute.PRINTER_SETTINGS) },
+                        onNavigateToCustomerDisplay = { state.navigateTo(DesktopScreenRoute.CUSTOMER_DISPLAY_SETTINGS) },
                         onNavigateToBackupRestore = { state.navigateTo(DesktopScreenRoute.BACKUP_RESTORE) },
                         onNavigateToDataManagement = { state.navigateTo(DesktopScreenRoute.DATA_MANAGEMENT) },
                         onNavigateToLicenseManagement = { state.navigateTo(DesktopScreenRoute.LICENSE_GATE) },
                         onBack = { state.navigateTo(DesktopScreenRoute.DASHBOARD) }
+                    )
+                }
+                DesktopScreenRoute.CUSTOMER_DISPLAY_SETTINGS -> {
+                    CustomerDisplaySettingsScreen(
+                        controller = state.customerDisplayController,
+                        strings = strings,
+                        onSaveSettings = { cfg ->
+                            runBlocking {
+                                CustomerDisplaySettingsRepository.saveConfig(state.db.settings, cfg)
+                            }
+                        },
+                        onNavigateToEstablishment = { state.navigateTo(DesktopScreenRoute.SETTINGS) },
+                        onNavigateToPrinters = { state.navigateTo(DesktopScreenRoute.PRINTER_SETTINGS) },
+                        onNavigateToBackupRestore = { state.navigateTo(DesktopScreenRoute.BACKUP_RESTORE) },
+                        onNavigateToDataManagement = { state.navigateTo(DesktopScreenRoute.DATA_MANAGEMENT) },
+                        onNavigateToLicense = { state.navigateTo(DesktopScreenRoute.LICENSE_GATE) },
+                        onBack = { state.navigateTo(DesktopScreenRoute.SETTINGS) }
                     )
                 }
                 DesktopScreenRoute.PRINTER_SETTINGS -> {
@@ -1919,16 +2045,15 @@ private fun DesktopShell(
             confirmation = confirmation,
             strings = strings,
             onPrintReceipt = {
-                val orderToPreview = confirmation.order
+                state.printCompletedSaleReceipt(confirmation)
                 state.completedSaleConfirmation = null
-                state.pendingOrder = orderToPreview
-                state.selectedReceiptKind = TicketKind.CUSTOMER
-                state.receiptReturnRoute = DesktopScreenRoute.POS_MAIN
-                state.navigateTo(DesktopScreenRoute.RECEIPT_PREVIEW)
+                state.pendingOrder = null
+                state.navigateTo(DesktopScreenRoute.POS_MAIN)
             },
             onFinish = {
                 state.completedSaleConfirmation = null
                 state.pendingOrder = null
+                state.navigateTo(DesktopScreenRoute.POS_MAIN)
             }
         )
     }
@@ -2057,8 +2182,14 @@ fun SaleCompletedDialog(
     onPrintReceipt: () -> Unit,
     onFinish: () -> Unit
 ) {
+    var isProcessing by remember { mutableStateOf(false) }
     AlertDialog(
-        onDismissRequest = onFinish,
+        onDismissRequest = {
+            if (!isProcessing) {
+                isProcessing = true
+                onFinish()
+            }
+        },
         icon = {
             Box(
                 modifier = Modifier
@@ -2177,7 +2308,13 @@ fun SaleCompletedDialog(
         },
         confirmButton = {
             Button(
-                onClick = onFinish,
+                onClick = {
+                    if (!isProcessing) {
+                        isProcessing = true
+                        onFinish()
+                    }
+                },
+                enabled = !isProcessing,
                 colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier
@@ -2193,7 +2330,13 @@ fun SaleCompletedDialog(
         },
         dismissButton = {
             OutlinedButton(
-                onClick = onPrintReceipt,
+                onClick = {
+                    if (!isProcessing) {
+                        isProcessing = true
+                        onPrintReceipt()
+                    }
+                },
+                enabled = !isProcessing,
                 shape = RoundedCornerShape(8.dp),
                 border = BorderStroke(1.dp, PosColors.Primary),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = PosColors.Primary),

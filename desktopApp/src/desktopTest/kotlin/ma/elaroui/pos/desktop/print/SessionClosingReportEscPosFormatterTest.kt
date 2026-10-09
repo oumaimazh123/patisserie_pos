@@ -247,6 +247,56 @@ class SessionClosingReportEscPosFormatterTest {
         assertTrue(text.contains("Total commande : 10,00 DH"))
     }
 
+    @Test
+    fun `summary closing report removes duplicata and reimpression and styles expected cash in bold double height`() {
+        listOf(58, 80).forEach { width ->
+            val sample = report()
+            val formatResult = assertIs<EscPosFormatResult.Success>(
+                SessionClosingReportEscPosFormatter.format(
+                    report = sample,
+                    establishmentName = "Pâtisserie Royale",
+                    paperWidth = width,
+                    type = SessionReportType.SUMMARY,
+                    isReprint = true
+                )
+            )
+            val bytes = formatResult.bytes
+            val text = String(bytes, FrenchEscPosEncoder.CHARSET)
+
+            // 1. Remove Duplicata and Reimpression from summary report
+            assertFalse(text.contains("DUPLICATA", ignoreCase = true), "Summary report must not contain DUPLICATA for width $width")
+            assertFalse(text.contains("REIMPRESSION", ignoreCase = true), "Summary report must not contain REIMPRESSION for width $width")
+
+            // 2. Contains expected summary elements and calculations unchanged
+            assertTrue(text.contains("RAPPORT DE CLOTURE - RESUME"), "Must contain summary title for width $width")
+            assertTrue(text.contains("Session N° :"), "Must contain Session N° for width $width")
+            assertTrue(text.contains("TOTAL VENTES :"), "Must contain total sales for width $width")
+            assertTrue(text.contains("ESPECES ATTENDUES :"), "Must contain expected cash for width $width")
+            assertTrue(text.contains("10,00 DH"), "Must contain expected cash value for width $width")
+
+            // 3. ESPECES ATTENDUES is styled in BOLD and DOUBLE_HEIGHT in ESC/POS stream
+            val expectedCashAscii = "ESPECES ATTENDUES :".toByteArray(FrenchEscPosEncoder.CHARSET)
+            var textIdx = -1
+            for (i in 0..bytes.size - expectedCashAscii.size) {
+                if (expectedCashAscii.indices.all { bytes[i + it] == expectedCashAscii[it] }) {
+                    textIdx = i
+                    break
+                }
+            }
+            assertTrue(textIdx > 0, "ESPECES ATTENDUES must be found in byte stream for width $width")
+
+            val prefix = bytes.sliceArray((textIdx - EscPosCommands.BOLD_ON.size - EscPosCommands.DOUBLE_HEIGHT.size) until textIdx)
+            assertContentEquals(EscPosCommands.BOLD_ON + EscPosCommands.DOUBLE_HEIGHT, prefix, "Must have BOLD_ON + DOUBLE_HEIGHT before ESPECES ATTENDUES for width $width")
+
+            var lineEndIdx = textIdx
+            while (lineEndIdx < bytes.size && bytes[lineEndIdx] != 0x0A.toByte()) {
+                lineEndIdx++
+            }
+            val suffix = bytes.sliceArray((lineEndIdx + 1) until (lineEndIdx + 1 + EscPosCommands.NORMAL_SIZE.size + EscPosCommands.BOLD_OFF.size))
+            assertContentEquals(EscPosCommands.NORMAL_SIZE + EscPosCommands.BOLD_OFF, suffix, "Must have NORMAL_SIZE + BOLD_OFF after ESPECES ATTENDUES for width $width")
+        }
+    }
+
     private fun report() = SessionClosingReport(
         session = RegisterSession(
             id = 1L,

@@ -92,8 +92,8 @@ class SaleConfirmationWorkflowTest {
             // 2. Submit cash payment
             state.pay(PaymentMethod.CASH, 20_00L)
 
-            // 3. Sale completed confirmation dialog must be displayed on POS_MAIN
-            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            // 3. Sale completed confirmation dialog must be displayed on PAYMENT screen
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute, "Flow must remain on PAYMENT screen after payment")
             assertNotNull(state.completedSaleConfirmation)
             val confirmation = state.completedSaleConfirmation!!
             assertEquals(10_00L, confirmation.order.totalCentimes)
@@ -101,21 +101,16 @@ class SaleConfirmationWorkflowTest {
 
             // 4. Cashier clicks 'Imprimer le ticket' directly from popup
             val printsBefore = printer.rawPrintCount
-            val printResult = state.printCompletedSaleReceipt(confirmation)
+            val printResult = state.printAndFinishSale(confirmation)
             assertTrue(printResult.success, "Direct print must report success")
             assertEquals(printsBefore + 1, printer.rawPrintCount, "Printer service must receive exactly one print job")
             assertEquals(PrinterRole.CASHIER_RECEIPT, printer.lastRole)
-
-            // Simulate popup closure action as wired in UI
-            state.completedSaleConfirmation = null
-            state.pendingOrder = null
-            state.navigateTo(DesktopScreenRoute.POS_MAIN)
 
             // 5. Verify UI state: returned to POS_MAIN without opening RECEIPT_PREVIEW
             assertNull(state.completedSaleConfirmation, "Confirmation popup must be closed")
             assertNull(state.pendingOrder, "Pending order must be cleared")
             assertTrue(state.cart.isEmpty(), "Cart must remain empty for next sale")
-            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute, "Route must remain POS_MAIN, never RECEIPT_PREVIEW")
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute, "Route must transition to POS_MAIN, never RECEIPT_PREVIEW")
 
             // 6. Verify single order in DB
             val savedOrders = db.salesHistory()
@@ -141,13 +136,12 @@ class SaleConfirmationWorkflowTest {
             state.createOrder()
             state.pay(PaymentMethod.CARD, 15_00L)
 
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute, "Flow must remain on PAYMENT screen after payment")
             assertNotNull(state.completedSaleConfirmation)
             val printsBefore = printer.rawPrintCount
 
             // Cashier clicks 'Terminer' without printing
-            state.completedSaleConfirmation = null
-            state.pendingOrder = null
-            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+            state.dismissCompletedSale()
 
             // Verify: No print submitted, popup dismissed, POS_MAIN active
             assertEquals(printsBefore, printer.rawPrintCount, "No print job should be sent on Terminer")
@@ -222,9 +216,7 @@ class SaleConfirmationWorkflowTest {
             assertTrue(state.message.contains("Erreur") || state.message.contains("hors ligne") || state.message.contains("débranché"), "UI error message must be set")
 
             // Close dialog
-            state.completedSaleConfirmation = null
-            state.pendingOrder = null
-            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+            state.dismissCompletedSale()
 
             // Verify: Sale was NOT lost! Still in database
             val savedOrders = db.salesHistory()
@@ -288,16 +280,14 @@ class SaleConfirmationWorkflowTest {
             state.createOrder()
             state.pay(PaymentMethod.CASH, 15_00L)
 
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute, "Must remain on PAYMENT route")
             val confirm1 = assertNotNull(state.completedSaleConfirmation)
             val initialPrints = printer.rawPrintCount
 
             // Simulate clicking primary "Imprimer le reçu"
-            val printRes = state.printCompletedSaleReceipt(confirm1)
+            val printRes = state.printAndFinishSale(confirm1)
             assertTrue(printRes.success, "Primary action Imprimer le reçu must succeed")
             assertEquals(initialPrints + 1, printer.rawPrintCount, "Primary action must trigger thermal print")
-            state.completedSaleConfirmation = null
-            state.pendingOrder = null
-            state.navigateTo(DesktopScreenRoute.POS_MAIN)
 
             assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
             assertNull(state.completedSaleConfirmation)
@@ -308,18 +298,289 @@ class SaleConfirmationWorkflowTest {
             state.createOrder()
             state.pay(PaymentMethod.CARD, 24_00L)
 
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute, "Must remain on PAYMENT route")
             assertNotNull(state.completedSaleConfirmation)
             val printsBeforeFinish = printer.rawPrintCount
 
             // Simulate clicking secondary "Terminer"
-            state.completedSaleConfirmation = null
-            state.pendingOrder = null
-            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+            state.dismissCompletedSale()
 
             assertEquals(printsBeforeFinish, printer.rawPrintCount, "Secondary action Terminer must NOT trigger printing")
             assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
             assertNull(state.completedSaleConfirmation)
             assertTrue(state.cart.isEmpty())
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun test07_duplicatePaymentCall_isSafelyPreventedWhenConfirmationIsAlreadyShown(): Unit = runBlocking {
+        val (db, state, _) = setupNavEnvironment()
+        try {
+            val owner = db.allUsers().first()
+            state.login(owner, "1234")
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+            val catId = db.categories.save(Category(0, "Pâtisseries", active = true, displayOrder = 1))
+            val prodId = db.products.save(Product(0, catId, "Éclair Chocolat", 14_00L, 1000, active = true))
+            state.refresh()
+
+            state.cart[prodId] = 1
+            state.createOrder()
+            state.pay(PaymentMethod.CASH, 20_00L)
+
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+            assertNotNull(state.completedSaleConfirmation)
+
+            // Rapid second pay attempt while confirmation is still on screen
+            state.pay(PaymentMethod.CASH, 20_00L)
+
+            // Verify only one sale was created in the database
+            val sales = db.salesHistory()
+            assertEquals(1, sales.size, "Exactly one sale must be created, duplicate payment must be blocked")
+
+            state.dismissCompletedSale()
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun test08_categoriesPopupNeverInterferesWithConfirmationOnPaymentScreen(): Unit = runBlocking {
+        val (db, state, _) = setupNavEnvironment()
+        try {
+            val owner = db.allUsers().first()
+            state.login(owner, "1234")
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+            val catId = db.categories.save(Category(0, "Viennoiseries", active = true, displayOrder = 1))
+            val prodId = db.products.save(Product(0, catId, "Pain au Chocolat", 6_00L, 1000, active = true))
+            state.refresh()
+
+            state.cart[prodId] = 1
+            state.createOrder()
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+
+            // On payment screen, pay succeeds
+            state.pay(PaymentMethod.CASH, 10_00L)
+
+            // 1. Current route remains PAYMENT: POSMainScreen is not active, so category picker popup cannot be open
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+            assertNotNull(state.completedSaleConfirmation)
+
+            // 2. Dismiss confirmation popup
+            state.dismissCompletedSale()
+
+            // 3. User navigates to POS_MAIN, and confirmation popup is clean/null
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertNull(state.completedSaleConfirmation)
+            assertFalse(state.autoOpenCategoryPickerOnPosMain, "Category popup must NOT auto-open after returning from completed sale")
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun test09_categoriesPopup_opensAutomaticallyOnNormalEntry_forCashierAndManager(): Unit = runBlocking {
+        val (db, state, _) = setupNavEnvironment()
+        try {
+            // Setup cashier and owner
+            db.createCashier("Caissier Test", "5678")
+            val cashier = db.allUsers().first { it.role == UserRole.CASHIER }
+            val owner = db.allUsers().first { it.role == UserRole.OWNER }
+
+            // 1. Cashier logs in and enters POS normally
+            state.login(cashier, "5678")
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category picker must auto-open on normal Cashier entry")
+
+            // Cashier visits session screen and returns to POS
+            state.navigateTo(DesktopScreenRoute.CURRENT_SESSION)
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+            assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category picker must auto-open when returning from other screens")
+
+            // 2. Manager logs in
+            state.login(owner, "1234")
+            assertEquals(DesktopScreenRoute.DASHBOARD, state.currentRoute)
+
+            // Manager enters POS from Dashboard
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+            assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category picker must auto-open on normal Manager entry from Dashboard")
+
+            // Manager visits Settings and returns to POS
+            state.navigateTo(DesktopScreenRoute.SETTINGS)
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+            assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category picker must auto-open when Manager returns from Settings")
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun test10_categoriesPopup_doesNotOpenAutomaticallyAfterReturningFromCompletedSale(): Unit = runBlocking {
+        val (db, state, printer) = setupNavEnvironment()
+        try {
+            val owner = db.allUsers().first()
+            state.login(owner, "1234")
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+            val catId = db.categories.save(Category(0, "Gâteaux", active = true, displayOrder = 1))
+            val prodId = db.products.save(Product(0, catId, "Éclair Café", 15_00L, 1000, active = true))
+            state.refresh()
+
+            // Flow 1: Complete sale and click "Imprimer le reçu"
+            state.cart[prodId] = 1
+            state.createOrder()
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+            state.pay(PaymentMethod.CASH, 20_00L)
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+            val conf1 = assertNotNull(state.completedSaleConfirmation)
+
+            state.printAndFinishSale(conf1)
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertNull(state.completedSaleConfirmation)
+            assertFalse(state.autoOpenCategoryPickerOnPosMain, "Category popup must NOT auto-open after returning from sale via Imprimer le reçu")
+
+            // Flow 2: Subsequent normal navigation to another screen and back to POS restores auto-open
+            state.navigateTo(DesktopScreenRoute.DASHBOARD)
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+            assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category popup must auto-open on subsequent normal entry")
+
+            // Flow 3: Complete sale and click "Terminer" (without printing)
+            state.cart[prodId] = 1
+            state.createOrder()
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+            state.pay(PaymentMethod.CARD, 15_00L)
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+            assertNotNull(state.completedSaleConfirmation)
+
+            state.dismissCompletedSale()
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertNull(state.completedSaleConfirmation)
+            assertFalse(state.autoOpenCategoryPickerOnPosMain, "Category popup must NOT auto-open after returning from sale via Terminer")
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun test11_cleanResetOfTemporaryState_preparesPosForNextCustomer(): Unit = runBlocking {
+        val (db, state, printer) = setupNavEnvironment()
+        try {
+            val owner = db.allUsers().first()
+            state.login(owner, "1234")
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+            val catId = db.categories.save(Category(0, "Pâtisseries Fines", active = true, displayOrder = 1))
+            val p1 = db.products.save(Product(0, catId, "Tarte Fraise", 20_00L, 1000, active = true))
+            val p2 = db.products.save(Product(0, catId, "Macaron", 10_00L, 1000, active = true))
+            state.refresh()
+
+            // First customer purchase with discounts and table
+            state.cart[p1] = 2
+            state.itemDiscountsBasisPoints[p1] = 1000 // 10%
+            state.discountBasisPoints = 500 // 5% global
+            state.tableId = 5L
+            state.createOrder()
+
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+            state.pay(PaymentMethod.CASH, 50_00L)
+            val conf = assertNotNull(state.completedSaleConfirmation)
+
+            // Click "Imprimer le reçu"
+            state.printAndFinishSale(conf)
+
+            // Verify POS is back on POS_MAIN and completely ready for the next customer
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertNull(state.completedSaleConfirmation, "Popup confirmation must be null")
+            assertNull(state.pendingOrder, "Pending order must be null")
+            assertNull(state.editingOrderId, "Editing order id must be null")
+            assertNull(state.tableId, "Table id must be null")
+            assertEquals(0, state.discountBasisPoints, "Global discount must be reset to 0")
+            assertTrue(state.itemDiscountsBasisPoints.isEmpty(), "Item discounts must be empty")
+            assertTrue(state.cart.isEmpty(), "Cart must be empty")
+            assertTrue(state.customerDisplayController.state.value is ma.elaroui.pos.shared.display.CustomerDisplayState.Idle, "Customer display must return to idle")
+
+            // Next customer makes a fresh purchase without interference
+            state.cart[p2] = 1
+            state.createOrder()
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+            val nextOrder = assertNotNull(state.pendingOrder)
+            assertEquals(10_00L, nextOrder.totalCentimes, "Next customer total must be exactly 10.00 DH without previous discounts or lines")
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun test12_atomicGuardPreventsDuplicatePrintingOnRapidClicks(): Unit = runBlocking {
+        val (db, state, printer) = setupNavEnvironment()
+        try {
+            val owner = db.allUsers().first()
+            state.login(owner, "1234")
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+            val catId = db.categories.save(Category(0, "Viennoiseries", active = true, displayOrder = 1))
+            val prodId = db.products.save(Product(0, catId, "Brioche", 8_00L, 1000, active = true))
+            state.refresh()
+
+            state.cart[prodId] = 1
+            state.createOrder()
+            state.pay(PaymentMethod.CASH, 10_00L)
+            val confirmation = assertNotNull(state.completedSaleConfirmation)
+
+            val initialPrints = printer.rawPrintCount
+
+            // First print call
+            val res1 = state.printAndFinishSale(confirmation)
+            assertTrue(res1.success)
+
+            // Immediate subsequent print call with same confirmation
+            val res2 = state.printAndFinishSale(confirmation)
+            // Should be suppressed safely and not send extra print job
+            assertEquals(initialPrints + 1, printer.rawPrintCount, "Printer must receive exactly one print job despite multiple calls")
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun test13_printerFailureDoesNotAlterSavedSale_allowsLaterReprint(): Unit = runBlocking {
+        val (db, state, printer) = setupNavEnvironment(shouldFailPrinter = true)
+        try {
+            val owner = db.allUsers().first()
+            state.login(owner, "1234")
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+            val catId = db.categories.save(Category(0, "Gâteaux", active = true, displayOrder = 1))
+            val prodId = db.products.save(Product(0, catId, "Forêt Noire", 25_00L, 1000, active = true))
+            state.refresh()
+
+            state.cart[prodId] = 1
+            state.createOrder()
+            state.pay(PaymentMethod.CARD, 25_00L)
+            val conf = assertNotNull(state.completedSaleConfirmation)
+
+            // Printing fails because printer is offline
+            val printResult = state.printAndFinishSale(conf)
+            assertFalse(printResult.success, "Print result must report failure")
+
+            // But flow still returns to POS_MAIN and keeps sale safely saved
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertNull(state.completedSaleConfirmation)
+            assertTrue(state.message.isNotBlank(), "Error message must be presented to user")
+
+            val sales = db.salesHistory()
+            assertEquals(1, sales.size, "Sale must be safely preserved in SQLite database")
+            assertEquals(25_00L, sales[0].order.totalCentimes)
+
+            // When printer is restored online, re-printing the receipt succeeds
+            printer.shouldFailPrint = false
+            val reprintResult = state.printCompletedSaleReceipt(conf)
+            assertTrue(reprintResult.success, "Reprint must succeed once printer is back online")
+            assertEquals(1, printer.rawPrintCount, "Printer must receive the receipt print job")
         } finally {
             db.close()
         }

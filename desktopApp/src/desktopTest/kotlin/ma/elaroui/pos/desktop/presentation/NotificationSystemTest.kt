@@ -167,8 +167,10 @@ class NotificationSystemTest {
         assertNotNull(msg)
         assertEquals(MessageSeverity.SUCCESS, msg.severity)
         assertTrue(msg.text.contains("enregistrée avec succès") || msg.text.contains("Paiement enregistré avec succès"))
-        assertEquals(DesktopScreenRoute.POS_MAIN, navState.currentRoute)
+        assertEquals(DesktopScreenRoute.PAYMENT, navState.currentRoute)
         assertNotNull(navState.completedSaleConfirmation)
+        navState.dismissCompletedSale()
+        assertEquals(DesktopScreenRoute.POS_MAIN, navState.currentRoute)
     }
 
     @Test

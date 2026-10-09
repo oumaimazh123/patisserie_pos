@@ -816,7 +816,7 @@ class WindowsPosHardcoreTestSuite {
             assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
 
             state.pay(PaymentMethod.CASH, 5000L) // Pay with 50 DH
-            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
             assertNotNull(state.completedSaleConfirmation)
             assertTrue(state.message.contains("Paiement enregistré") || state.message.contains("Payment completed") || state.message.contains("Vente enregistrée"))
 
@@ -926,7 +926,7 @@ class WindowsPosHardcoreTestSuite {
             state.createOrder()
             assertNotNull(state.pendingOrder)
             state.pay(PaymentMethod.CASH, 2000L)
-            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
             assertNotNull(state.completedSaleConfirmation)
 
             val completedOrder = db.orders.findById(state.pendingOrder!!.id)

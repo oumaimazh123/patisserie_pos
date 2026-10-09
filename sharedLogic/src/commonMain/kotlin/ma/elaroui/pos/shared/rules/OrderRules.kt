@@ -45,7 +45,7 @@ object OrderCalculationRules {
             )
             totalItemDiscounts = MathRules.addExact(totalItemDiscounts, lineDisc)
 
-            val tax = MathRules.multiplyExact(lineTotal, line.taxRateBasisPoints.toLong()) /
+            val tax = MathRules.multiplyExact(lineTotal - lineDisc, line.taxRateBasisPoints.toLong()) /
                 (10_000L + line.taxRateBasisPoints)
             taxBeforeDiscount = MathRules.addExact(taxBeforeDiscount, tax)
         }
@@ -57,8 +57,8 @@ object OrderCalculationRules {
         )
         val totalDiscount = MathRules.addExact(totalItemDiscounts, globalDiscount)
         val total = MathRules.subtractExact(subtotal, totalDiscount)
-        val tax = if (subtotal == 0L) 0L else {
-            MathRules.divideHalfUp(MathRules.multiplyExact(taxBeforeDiscount, total), subtotal)
+        val tax = if (subtotalAfterItemDiscounts == 0L) 0L else {
+            MathRules.divideHalfUp(MathRules.multiplyExact(taxBeforeDiscount, total), subtotalAfterItemDiscounts)
         }
         return OrderTotals(itemCount, subtotal, totalDiscount, tax, total)
     }

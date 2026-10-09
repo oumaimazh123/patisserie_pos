@@ -511,6 +511,26 @@ class WindowsPosDatabaseTest {
             savedProdId = db.products.save(Product(0L, savedCatId, "Croissant Beurre", 6_00L, 1000, sku = "CRO-01", barcode = "111222"))
             assertEquals(savedCatId, db.products.findById(savedProdId)?.categoryId)
         }
+        // Reconstruct the actual v10 products shape: category_id was mandatory.
+        // Merely reopening the current database never executes migration 11.
+        DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { c ->
+            c.createStatement().use { s ->
+                s.execute("""
+                    CREATE TABLE products_v10(
+                        id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES categories(id),
+                        name TEXT NOT NULL, price_centimes INTEGER NOT NULL CHECK(price_centimes>0),
+                        tax_basis_points INTEGER NOT NULL CHECK(tax_basis_points BETWEEN 0 AND 10000),
+                        image_path TEXT, available INTEGER NOT NULL DEFAULT 1, active INTEGER NOT NULL DEFAULT 1,
+                        display_order INTEGER NOT NULL DEFAULT 0, sku TEXT, barcode TEXT, name_arabic TEXT,
+                        unit TEXT, description TEXT, deleted_at INTEGER DEFAULT NULL
+                    )
+                """.trimIndent())
+                s.execute("INSERT INTO products_v10 SELECT id,category_id,name,price_centimes,tax_basis_points,image_path,available,active,display_order,sku,barcode,name_arabic,unit,description,deleted_at FROM products")
+                s.execute("DROP TABLE products")
+                s.execute("ALTER TABLE products_v10 RENAME TO products")
+                s.execute("DELETE FROM schema_migrations WHERE version=11")
+            }
+        }
         WindowsPosDatabase.open(path).use { db ->
             val prod = db.products.findById(savedProdId)
             assertNotNull(prod)
@@ -520,6 +540,15 @@ class WindowsPosDatabaseTest {
             assertEquals("CRO-01", prod.sku)
             assertEquals("111222", prod.barcode)
             assertEquals(11, db.schemaVersion())
+            db.products.save(prod.copy(categoryId = null))
+            assertNull(db.products.findById(savedProdId)?.categoryId)
+            assertFails { db.products.save(prod.copy(id = 0, name = "Duplicate barcode")) }
+            db.read { c ->
+                c.createStatement().use { s ->
+                    s.executeQuery("PRAGMA foreign_key_check").use { assertFalse(it.next()) }
+                    s.executeQuery("PRAGMA integrity_check").use { assertTrue(it.next()); assertEquals("ok", it.getString(1)) }
+                }
+            }
         }
     }
 

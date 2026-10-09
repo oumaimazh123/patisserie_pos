@@ -50,6 +50,21 @@ object VfdMessageFormatter {
     }
 
     /**
+     * Sanitizes and center-aligns text horizontally within the specified width using spaces.
+     * Safely truncates to width if the text exceeds width.
+     */
+    fun centerLine(text: String, width: Int): String {
+        val safe = transliterateAccents(text).trim()
+        if (safe.length >= width) {
+            return safe.take(width)
+        }
+        val totalSpaces = width - safe.length
+        val leftSpaces = totalSpaces / 2
+        val rightSpaces = totalSpaces - leftSpaces
+        return " ".repeat(leftSpaces) + safe + " ".repeat(rightSpaces)
+    }
+
+    /**
      * Formats a line with a left-aligned label and right-aligned value,
      * ensuring the total line length is exactly [width].
      */
@@ -86,8 +101,10 @@ object VfdMessageFormatter {
 
         return when (state) {
             is CustomerDisplayState.Idle -> {
-                val l1 = fitLine(config.welcomeLine1.ifBlank { "BIENVENUE" }, cols)
-                val l2 = fitLine(config.welcomeLine2.ifBlank { "HYPER CAISSE" }, cols)
+                val line1 = state.line1.ifBlank { config.welcomeLine1.ifBlank { "BIENVENUE" } }
+                val line2 = state.line2.ifBlank { config.welcomeLine2 }
+                val l1 = centerLine(line1, cols)
+                val l2 = centerLine(line2, cols)
                 FormattedDisplayLines(l1, l2)
             }
 
@@ -131,14 +148,14 @@ object VfdMessageFormatter {
             }
 
             is CustomerDisplayState.PaymentCompleted -> {
-                val l1 = fitLine(config.thankYouLine1.ifBlank { "MERCI POUR VOTRE" }, cols)
-                val l2 = fitLine(config.thankYouLine2.ifBlank { "VISITE" }, cols)
+                val l1 = centerLine(config.thankYouLine1.ifBlank { "MERCI POUR VOTRE" }, cols)
+                val l2 = centerLine(config.thankYouLine2.ifBlank { "VISITE" }, cols)
                 FormattedDisplayLines(l1, l2)
             }
 
             is CustomerDisplayState.CustomMessage -> {
-                val l1 = fitLine(state.line1, cols)
-                val l2 = fitLine(state.line2, cols)
+                val l1 = centerLine(state.line1, cols)
+                val l2 = centerLine(state.line2, cols)
                 FormattedDisplayLines(l1, l2)
             }
         }

@@ -150,6 +150,7 @@ class DesktopNavState(
     private val escPosFormatter = EscPosFormatterFactory.create()
     private val automaticPrintGuard = PrintJobDeduplicator()
     private val closingSessionLock = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val isFinalizingSale = java.util.concurrent.atomic.AtomicBoolean(false)
     var setupComplete by mutableStateOf(runBlocking { db.settings.get("setup_complete") == "true" })
     var currentUser by mutableStateOf<User?>(null)
     var currentRoute by mutableStateOf(DesktopScreenRoute.POS_MAIN)
@@ -162,7 +163,7 @@ class DesktopNavState(
         if (cart.isEmpty()) return 0L
         val lines = cart.mapNotNull { (productId, qty) ->
             if (qty <= 0) return@mapNotNull null
-            val product = products.firstOrNull { it.id == productId } ?: return@mapNotNull null
+            val product = checkoutProducts.firstOrNull { it.id == productId } ?: return@mapNotNull null
             OrderLine(
                 productId = product.id,
                 name = product.name,
@@ -261,6 +262,17 @@ class DesktopNavState(
 
     // Data models
     var products by mutableStateOf<List<Product>>(emptyList())
+    val checkoutProducts: List<Product>
+        get() {
+            val snapshots = openOrders.firstOrNull { it.id == editingOrderId }?.lines?.associateBy { it.productId }
+                ?: return products
+            return products.map { product ->
+                snapshots[product.id]?.let { line ->
+                    product.copy(name = line.name, priceCentimes = line.unitPriceCentimes,
+                        taxRateBasisPoints = line.taxRateBasisPoints)
+                } ?: product
+            }
+        }
     var categories by mutableStateOf<List<Category>>(emptyList())
     var popularCategoryIds by mutableStateOf<List<Long>>(emptyList())
     var categoryScores by mutableStateOf<Map<Long, Long>>(emptyMap())
@@ -284,6 +296,8 @@ class DesktopNavState(
 
     fun invalidateCompany() {
         cachedCompany = null
+        val updatedConfig = runBlocking { CustomerDisplaySettingsRepository.loadConfig(db.settings) }
+        runBlocking { customerDisplayController.updateConfig(updatedConfig) }
     }
 
     fun loadSalesHistory() = runBlocking {
@@ -303,6 +317,8 @@ class DesktopNavState(
     var selectedReceiptKind by mutableStateOf(TicketKind.CUSTOMER)
     var receiptReturnRoute by mutableStateOf(DesktopScreenRoute.POS_MAIN)
     var completedSaleConfirmation by mutableStateOf<CompletedSaleConfirmation?>(null)
+    var isPaymentProcessing by mutableStateOf(false)
+    var autoOpenCategoryPickerOnPosMain by mutableStateOf(true)
     var orderType by mutableStateOf(OrderType.COUNTER)
     var tableId by mutableStateOf<Long?>(null)
     var discountBasisPoints by mutableIntStateOf(0)
@@ -420,6 +436,9 @@ class DesktopNavState(
 
     fun navigateTo(route: DesktopScreenRoute) {
         clearMessage()
+        if (route != DesktopScreenRoute.POS_MAIN) {
+            autoOpenCategoryPickerOnPosMain = true
+        }
         if (isOwnerRoute(route) && currentUser?.role != UserRole.OWNER) {
             currentRoute = DesktopScreenRoute.POS_MAIN
             return
@@ -612,7 +631,13 @@ class DesktopNavState(
         val effectiveType = existing?.type ?: OrderType.COUNTER
         val result = CreateOrder(db.sessions, db.categories, db.products, db.tables, db.orders).execute(
             orderId, existing?.number ?: "SALE-${System.currentTimeMillis()}", effectiveType, open.id,
-            cart.map { it.key to it.value }, null, currentUser!!.id, discountBasisPoints,
+            cart.map { it.key to it.value }, existing?.tableId, currentUser!!.id, discountBasisPoints,
+            customerName = existing?.customerName,
+            customerPhone = existing?.customerPhone,
+            pickupDateEpochMs = existing?.pickupDateEpochMs,
+            preparationStatus = existing?.preparationStatus ?: PreparationStatus.PENDING,
+            customNote = existing?.customNote,
+            depositCentimes = existing?.depositCentimes ?: 0L,
             itemDiscountsBasisPoints = itemDiscountsBasisPoints.toMap()
         )
         if (result is UseCaseResult.Success) {
@@ -686,35 +711,40 @@ class DesktopNavState(
     }
 
     fun pay(method: PaymentMethod, received: Long?) = runBlocking {
+        if (isPaymentProcessing || completedSaleConfirmation != null) return@runBlocking
         val order = pendingOrder ?: return@runBlocking
-        val result = CompletePayment(db.sessions, db.orders, db.payments, db.transactions)
-            .execute(order.id, method, received, "${order.id}-${System.nanoTime()}", currentUser!!.id)
-        if (result is UseCaseResult.Success) {
-            val payment = result.value
-            val customer = getEffectiveCustomerPrinter()
+        isPaymentProcessing = true
+        try {
+            val result = CompletePayment(db.sessions, db.orders, db.payments, db.transactions)
+                .execute(order.id, method, received, "${order.id}-${System.nanoTime()}", currentUser!!.id)
+            if (result is UseCaseResult.Success) {
+                val payment = result.value
+                val customer = getEffectiveCustomerPrinter()
 
-            val drawerEnabled = db.settings.get("cash_drawer_enabled") == "true"
-            if (method == PaymentMethod.CASH && drawerEnabled && customer.isNotBlank() &&
-                automaticPrintGuard.acquire("drawer:${order.id}:${payment.id}")) {
-                val drawerResult = printerService.openCashDrawer(customer)
-                if (!drawerResult.success) automaticPrintGuard.releaseAfterFailure("drawer:${order.id}:${payment.id}")
+                val drawerEnabled = db.settings.get("cash_drawer_enabled") == "true"
+                if (method == PaymentMethod.CASH && drawerEnabled && customer.isNotBlank() &&
+                    automaticPrintGuard.acquire("drawer:${order.id}:${payment.id}")) {
+                    val drawerResult = printerService.openCashDrawer(customer)
+                    if (!drawerResult.success) automaticPrintGuard.releaseAfterFailure("drawer:${order.id}:${payment.id}")
+                }
+
+                completedSaleConfirmation = CompletedSaleConfirmation(
+                    order = order,
+                    payment = payment,
+                    paymentMethod = method,
+                    receivedCentimes = received,
+                    changeCentimes = payment.changeCentimes
+                )
+                cart.clear()
+                customerDisplayController.paymentCompleted()
+                showSuccess(strings.saleCompletedSuccess)
+                refresh()
+            } else {
+                val rawReason = (result as UseCaseResult.Failure).reason
+                showError(mapFailureToFrench(rawReason))
             }
-
-            completedSaleConfirmation = CompletedSaleConfirmation(
-                order = order,
-                payment = payment,
-                paymentMethod = method,
-                receivedCentimes = received,
-                changeCentimes = payment.changeCentimes
-            )
-            cart.clear()
-            customerDisplayController.paymentCompleted()
-            showSuccess(strings.saleCompletedSuccess)
-            currentRoute = DesktopScreenRoute.POS_MAIN
-            refresh()
-        } else {
-            val rawReason = (result as UseCaseResult.Failure).reason
-            showError(mapFailureToFrench(rawReason))
+        } finally {
+            isPaymentProcessing = false
         }
     }
 
@@ -774,6 +804,42 @@ class DesktopNavState(
             ))
         }
         printResult
+    }
+
+    fun dismissCompletedSale() {
+        completedSaleConfirmation = null
+        pendingOrder = null
+        editingOrderId = null
+        tableId = null
+        cart.clear()
+        itemDiscountsBasisPoints.clear()
+        discountBasisPoints = 0
+        customerDisplayController.showIdle()
+        autoOpenCategoryPickerOnPosMain = false
+        currentRoute = DesktopScreenRoute.POS_MAIN
+        refresh()
+    }
+
+    fun finishSaleWithoutPrinting() {
+        if (!isFinalizingSale.compareAndSet(false, true)) return
+        try {
+            dismissCompletedSale()
+        } finally {
+            isFinalizingSale.set(false)
+        }
+    }
+
+    fun printAndFinishSale(confirmation: CompletedSaleConfirmation): PrintResult {
+        if (!isFinalizingSale.compareAndSet(false, true)) {
+            return PrintResult(true, "Action déjà en cours")
+        }
+        try {
+            val result = printCompletedSaleReceipt(confirmation)
+            dismissCompletedSale()
+            return result
+        } finally {
+            isFinalizingSale.set(false)
+        }
     }
 
     fun openRegister(value: Long) = runBlocking {
@@ -1362,7 +1428,7 @@ private fun DesktopShell(
                 }
                 DesktopScreenRoute.POS_MAIN -> {
                     POSMainScreen(
-                        products = state.products,
+                        products = state.checkoutProducts,
                         categories = state.categories,
                         popularCategoryIds = state.popularCategoryIds,
                         categoryScores = state.categoryScores,
@@ -1371,7 +1437,7 @@ private fun DesktopShell(
                         discountBasisPoints = state.discountBasisPoints,
                         itemDiscountsBasisPoints = state.itemDiscountsBasisPoints,
                         strings = strings,
-                        autoOpenCategoryPicker = true,
+                        autoOpenCategoryPicker = state.autoOpenCategoryPickerOnPosMain,
                         onProductClicked = { p ->
                             state.cart[p.id] = (state.cart[p.id] ?: 0) + 1
                             state.syncCustomerDisplayCart()
@@ -1438,10 +1504,15 @@ private fun DesktopShell(
                         PaymentScreen(
                             order = order,
                             strings = strings,
+                            isSubmitting = state.isPaymentProcessing || state.completedSaleConfirmation != null,
                             onPaymentSubmitted = { m, r -> state.pay(m, r) },
                             onBack = {
-                                state.navigateTo(DesktopScreenRoute.POS_MAIN)
-                                state.syncCustomerDisplayCart()
+                                if (state.completedSaleConfirmation != null) {
+                                    state.dismissCompletedSale()
+                                } else {
+                                    state.navigateTo(DesktopScreenRoute.POS_MAIN)
+                                    state.syncCustomerDisplayCart()
+                                }
                             },
                             onCashAmountChanged = { received, _ ->
                                 if (received != null && received > 0L) {
@@ -2032,15 +2103,10 @@ private fun DesktopShell(
             confirmation = confirmation,
             strings = strings,
             onPrintReceipt = {
-                state.printCompletedSaleReceipt(confirmation)
-                state.completedSaleConfirmation = null
-                state.pendingOrder = null
-                state.navigateTo(DesktopScreenRoute.POS_MAIN)
+                state.printAndFinishSale(confirmation)
             },
             onFinish = {
-                state.completedSaleConfirmation = null
-                state.pendingOrder = null
-                state.navigateTo(DesktopScreenRoute.POS_MAIN)
+                state.finishSaleWithoutPrinting()
             }
         )
     }
@@ -2309,7 +2375,8 @@ fun SaleCompletedDialog(
                     .pointerHoverIcon(PointerIcon.Hand)
             ) {
                 Text(
-                    "🖨️ " + strings.printReceipt,
+                    if (isProcessing) "⏳ " + strings.text("En cours...", "Processing...", "جاري المعالجة...")
+                    else "🖨️ " + strings.printReceipt,
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )

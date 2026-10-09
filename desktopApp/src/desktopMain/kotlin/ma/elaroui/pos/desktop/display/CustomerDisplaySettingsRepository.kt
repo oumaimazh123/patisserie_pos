@@ -37,8 +37,14 @@ object CustomerDisplaySettingsRepository {
         val stopBits = VfdStopBits.fromInt(settingsRepo.get(KEY_STOP_BITS)?.toIntOrNull())
         val parity = VfdParity.fromName(settingsRepo.get(KEY_PARITY))
         val columns = settingsRepo.get(KEY_COLUMNS)?.toIntOrNull() ?: 20
-        val welcome1 = settingsRepo.get(KEY_WELCOME_LINE1) ?: "BIENVENUE"
-        val welcome2 = settingsRepo.get(KEY_WELCOME_LINE2) ?: "HYPER CAISSE"
+        val welcome1 = settingsRepo.get(KEY_WELCOME_LINE1)?.takeIf { it.isNotBlank() } ?: "BIENVENUE"
+        val establishmentName = settingsRepo.get("establishment_name")?.trim().orEmpty()
+        val storedWelcome2 = settingsRepo.get(KEY_WELCOME_LINE2)?.trim()
+        val welcome2 = if (storedWelcome2.isNullOrBlank() || storedWelcome2 == "HYPER CAISSE") {
+            establishmentName
+        } else {
+            storedWelcome2
+        }
         val thankYou1 = settingsRepo.get(KEY_THANKYOU_LINE1) ?: "MERCI POUR VOTRE"
         val thankYou2 = settingsRepo.get(KEY_THANKYOU_LINE2) ?: "VISITE"
         val thankYouDuration = settingsRepo.get(KEY_THANKYOU_DURATION)?.toIntOrNull() ?: 5

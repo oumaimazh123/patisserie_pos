@@ -103,7 +103,13 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                     val dateTag = java.time.LocalDateTime.now()
                         .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
                     val backupFile = backupsDir.resolve("auto_pre_update_$dateTag.db")
-                    Files.copy(live, backupFile, StandardCopyOption.REPLACE_EXISTING)
+                    // Include committed WAL pages in the safety snapshot after an unclean shutdown.
+                    val escaped = backupFile.toAbsolutePath().toString().replace("'", "''")
+                    if (!Files.exists(backupFile)) {
+                        DriverManager.getConnection("jdbc:sqlite:${live.toAbsolutePath()}").use { db ->
+                            db.createStatement().use { it.execute("VACUUM INTO '$escaped'") }
+                        }
+                    }
 
                     // Retain only latest 10 auto_pre_update backups to avoid disk growth
                     Files.list(backupsDir).use { stream ->
@@ -203,7 +209,18 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
             require(Files.isRegularFile(path) && Files.size(path) > 0L)
             DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { db ->
                 db.createStatement().use { statement ->
-                    statement.executeQuery("PRAGMA integrity_check").use { it.next() && it.getString(1) == "ok" }
+                    val intact = statement.executeQuery("PRAGMA integrity_check").use { it.next() && it.getString(1) == "ok" }
+                    if (!intact) return@use false
+                    val tables = statement.executeQuery("SELECT name FROM sqlite_master WHERE type='table'").use { rows ->
+                        buildSet { while (rows.next()) add(rows.getString(1)) }
+                    }
+                    val required = setOf("schema_migrations", "users", "categories", "products", "registers",
+                        "register_sessions", "cash_movements", "orders", "order_items", "payments", "settings",
+                        "restaurant_tables", "dining_areas", "audit_logs")
+                    if (!tables.containsAll(required)) return@use false
+                    val version = statement.executeQuery("SELECT MAX(version) FROM schema_migrations").use { it.next(); it.getInt(1) }
+                    if (version !in 1..11) return@use false
+                    statement.executeQuery("PRAGMA foreign_key_check").use { !it.next() }
                 }
             }
         }.getOrDefault(false)
@@ -232,6 +249,14 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                 }
                 rewriteManagedImagePaths(db, "products", mappings)
                 rewriteManagedImagePaths(db, "dining_areas", mappings)
+                val hasCategoryImage = db.createStatement().use { s ->
+                    s.executeQuery("PRAGMA table_info(categories)").use { rows ->
+                        var found = false
+                        while (rows.next()) if (rows.getString("name") == "image_path") found = true
+                        found
+                    }
+                }
+                if (hasCategoryImage) rewriteManagedImagePaths(db, "categories", mappings)
                 true
             }
         }
@@ -1945,12 +1970,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         }
     }
 
-    fun validateBackup(source: Path): Boolean = runCatching {
-        require(Files.isRegularFile(source))
-        DriverManager.getConnection("jdbc:sqlite:${source.toAbsolutePath()}").use { db ->
-            db.createStatement().use { s->s.executeQuery("PRAGMA integrity_check").use { it.next() && it.getString(1)=="ok" } }
-        }
-    }.getOrDefault(false)
+    fun validateBackup(source: Path): Boolean = isValidSqlite(source)
 
     fun stageRestore(source: Path) {
         require(validateBackup(source)) { "Invalid or corrupted backup" }
@@ -2468,6 +2488,13 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         override suspend fun save(order: Order): Long = read { c ->
             transactionBlocking {
                 val id = if (order.id == 0L) nextId("orders") else order.id
+                val previous = loadOrder(c, id)
+                if (previous != null) {
+                    require(previous.status == OrderStatus.OPEN) { "Completed or cancelled orders cannot be overwritten" }
+                    require(previous.cashierId == order.cashierId && previous.registerSessionId == order.registerSessionId) {
+                        "Order belongs to another user session"
+                    }
+                }
                 val previousTableId = orderTable(c, id)
                 val existingCreatedAt = orderCreatedAt(c, id)
                 val createdAt = when {

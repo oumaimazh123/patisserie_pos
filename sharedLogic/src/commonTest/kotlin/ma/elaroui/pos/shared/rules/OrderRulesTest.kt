@@ -10,6 +10,20 @@ import kotlin.test.assertTrue
 
 class OrderRulesTest {
     @Test
+    fun itemDiscountOnlyReducesTaxOfTheDiscountedProduct() {
+        val lines = listOf(
+            OrderLine(1, "Taxed cake", 1200, 1, 2000),
+            OrderLine(2, "Exempt item", 1000, 1, 0)
+        )
+        val freeCake = OrderCalculationRules.calculate(lines, itemDiscountsBasisPoints = mapOf(1L to 10000))
+        assertEquals(1000L, freeCake.totalCentimes)
+        assertEquals(0L, freeCake.taxCentimes)
+        val freeExemptItem = OrderCalculationRules.calculate(lines, itemDiscountsBasisPoints = mapOf(2L to 10000))
+        assertEquals(1200L, freeExemptItem.totalCentimes)
+        assertEquals(200L, freeExemptItem.taxCentimes)
+    }
+
+    @Test
     fun calculatesTaxInclusiveSubtotalTaxAndTotal() {
         val totals = OrderCalculationRules.calculate(
             listOf(

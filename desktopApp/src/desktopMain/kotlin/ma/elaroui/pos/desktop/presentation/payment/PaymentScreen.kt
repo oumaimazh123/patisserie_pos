@@ -42,7 +42,8 @@ fun PaymentScreen(
     uiMessage: UiMessage? = null,
     onClearMessage: () -> Unit = {},
     onCashAmountChanged: ((receivedCentimes: Long?, changeCentimes: Long) -> Unit)? = null,
-    onPaymentMethodChanged: ((PaymentMethod) -> Unit)? = null
+    onPaymentMethodChanged: ((PaymentMethod) -> Unit)? = null,
+    isSubmitting: Boolean = false
 ) {
     var selectedMethod by remember { mutableStateOf(PaymentMethod.CASH) }
     var receivedCashInput by remember { mutableStateOf("") }
@@ -185,7 +186,7 @@ fun PaymentScreen(
                             }
 
                             ValidationButton(
-                                enabled = isPaymentValid,
+                                enabled = isPaymentValid && !isSubmitting,
                                 onClick = { onPaymentSubmitted(selectedMethod, parsedCash) },
                                 strings = strings
                             )
@@ -289,7 +290,7 @@ fun PaymentScreen(
                         }
 
                         ValidationButton(
-                            enabled = isPaymentValid,
+                            enabled = isPaymentValid && !isSubmitting,
                             onClick = { onPaymentSubmitted(selectedMethod, parsedCash) },
                             strings = strings
                         )

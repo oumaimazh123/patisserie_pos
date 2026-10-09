@@ -47,6 +47,9 @@ class AuditOrderIntegrityTest {
                 create.execute(1, "AUDIT-1", OrderType.COUNTER, 1, listOf(1L to 2), null, 1)
             )
             assertEquals(OrderStatus.COMPLETED, db.orders.findById(1)?.status)
+            assertFailsWith<IllegalArgumentException> {
+                db.orders.save(original)
+            }
             assertEquals(original.totalCentimes, db.payments.totalCashForSession(1))
         }
     }

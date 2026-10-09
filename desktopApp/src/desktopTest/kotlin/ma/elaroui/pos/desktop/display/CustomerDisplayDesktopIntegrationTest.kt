@@ -80,10 +80,29 @@ class CustomerDisplayDesktopIntegrationTest {
         assertEquals(20, loadedConfig.columns)
         assertEquals(2, loadedConfig.rows)
         assertEquals("BIENVENUE", loadedConfig.welcomeLine1)
-        assertEquals("HYPER CAISSE", loadedConfig.welcomeLine2)
+        assertEquals("", loadedConfig.welcomeLine2)
         assertEquals("MERCI POUR VOTRE", loadedConfig.thankYouLine1)
         assertEquals("VISITE", loadedConfig.thankYouLine2)
         assertEquals(5, loadedConfig.thankYouDurationSeconds)
+    }
+
+    @Test
+    fun testSettingsRepositoryLoadsDynamicEstablishmentName() = runBlocking {
+        val repo = InMemorySettingsRepository()
+        repo.put(AppSetting("establishment_name", "Pâtisserie Étoile"))
+
+        val loadedConfig = CustomerDisplaySettingsRepository.loadConfig(repo)
+        assertEquals("Pâtisserie Étoile", loadedConfig.welcomeLine2)
+
+        // Legacy "HYPER CAISSE" setting is automatically replaced with establishment name
+        repo.put(AppSetting("customer_display_welcome_line2", "HYPER CAISSE"))
+        val legacyMigratedConfig = CustomerDisplaySettingsRepository.loadConfig(repo)
+        assertEquals("Pâtisserie Étoile", legacyMigratedConfig.welcomeLine2)
+
+        // Custom non-default welcome line 2 is preserved
+        repo.put(AppSetting("customer_display_welcome_line2", "Mon Message Personnalisé"))
+        val customConfig = CustomerDisplaySettingsRepository.loadConfig(repo)
+        assertEquals("Mon Message Personnalisé", customConfig.welcomeLine2)
     }
 
     @Test

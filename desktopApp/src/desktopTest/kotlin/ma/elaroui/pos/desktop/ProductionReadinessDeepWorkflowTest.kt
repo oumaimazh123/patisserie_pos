@@ -93,8 +93,8 @@ class ProductionReadinessDeepWorkflowTest {
             // 4. Pay in cash with 100.00 DH (10_000 centimes)
             state.pay(PaymentMethod.CASH, 10_000L)
 
-            // 5. Must return to POS_MAIN and display sale confirmation pop-up
-            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute, "Flow must return directly to POS_MAIN")
+            // 5. Must stay on PAYMENT and display sale confirmation pop-up
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute, "Flow must stay on PAYMENT screen after payment")
             assertNotNull(state.completedSaleConfirmation, "Confirmation pop-up state must be populated")
 
             val confirmation = state.completedSaleConfirmation!!
@@ -111,8 +111,7 @@ class ProductionReadinessDeepWorkflowTest {
             assertEquals(PrinterRole.CASHIER_RECEIPT, printer.lastRole)
 
             // 7. Cashier clicks 'Terminer'
-            state.completedSaleConfirmation = null
-            state.pendingOrder = null
+            state.dismissCompletedSale()
 
             // 8. POS state is completely clean and ready for next customer
             assertNull(state.completedSaleConfirmation)
@@ -145,7 +144,7 @@ class ProductionReadinessDeepWorkflowTest {
             // Card payment
             state.pay(PaymentMethod.CARD, null)
 
-            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
             assertNotNull(state.completedSaleConfirmation)
             val conf = state.completedSaleConfirmation!!
             assertEquals(44_00L, conf.order.totalCentimes)
@@ -156,8 +155,8 @@ class ProductionReadinessDeepWorkflowTest {
             assertEquals(0, printer.drawerOpenCount, "Cash drawer must not open for card payment")
 
             // Terminer
-            state.completedSaleConfirmation = null
-            state.pendingOrder = null
+            state.dismissCompletedSale()
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
             assertTrue(state.cart.isEmpty())
         } finally {
             db.close()
@@ -268,15 +267,13 @@ class ProductionReadinessDeepWorkflowTest {
             state.cart[pId] = 2
             state.createOrder()
             state.pay(PaymentMethod.CASH, 40_00L)
-            state.completedSaleConfirmation = null
-            state.pendingOrder = null
+            state.dismissCompletedSale()
 
             // 2. Sale in card: 60.00 DH
             state.cart[pId] = 3
             state.createOrder()
             state.pay(PaymentMethod.CARD, null)
-            state.completedSaleConfirmation = null
-            state.pendingOrder = null
+            state.dismissCompletedSale()
 
             // 3. Cash movement: In 100.00 DH
             state.movement(CashMovementType.CASH_IN, 10_000L, "Apport monnaie")
@@ -365,12 +362,12 @@ class ProductionReadinessDeepWorkflowTest {
                     assertEquals(0L, state.completedSaleConfirmation?.changeCentimes ?: 0L)
                 }
 
-                assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+                assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
                 assertNotNull(state.completedSaleConfirmation)
 
                 // Dismiss pop-up
-                state.completedSaleConfirmation = null
-                state.pendingOrder = null
+                state.dismissCompletedSale()
+                assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
                 assertTrue(state.cart.isEmpty())
             }
 
@@ -448,11 +445,13 @@ class ProductionReadinessDeepWorkflowTest {
             assertEquals(order.subtotalCentimes - order.discountCentimes, order.totalCentimes)
 
             state.pay(PaymentMethod.CASH, 200_00L)
-            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
             assertNotNull(state.completedSaleConfirmation)
             val conf = state.completedSaleConfirmation!!
             assertEquals(order.totalCentimes, conf.order.totalCentimes)
             assertEquals(200_00L - order.totalCentimes, conf.changeCentimes)
+            state.dismissCompletedSale()
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
         } finally {
             db.close()
         }

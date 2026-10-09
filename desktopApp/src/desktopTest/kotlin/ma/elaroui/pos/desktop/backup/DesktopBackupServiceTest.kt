@@ -18,6 +18,26 @@ import ma.elaroui.pos.shared.domain.Product
 
 class DesktopBackupServiceTest {
     @Test
+    fun rejectsUnrelatedSqliteAndFutureSchemaBeforeStagingRestore() {
+        val root = Files.createTempDirectory("audit-backup-schema")
+        val unrelated = root.resolve("unrelated.db")
+        java.sql.DriverManager.getConnection("jdbc:sqlite:$unrelated").use { c ->
+            c.createStatement().use { it.execute("CREATE TABLE other(value TEXT)") }
+        }
+        WindowsPosDatabase.open(root.resolve("live.db")).use { db ->
+            assertFalse(db.validateBackup(unrelated))
+            val future = root.resolve("future.db")
+            db.backupTo(future)
+            java.sql.DriverManager.getConnection("jdbc:sqlite:$future").use { c ->
+                c.createStatement().use { it.execute("INSERT INTO schema_migrations VALUES(999,1)") }
+            }
+            assertFalse(db.validateBackup(future))
+            kotlin.test.assertFailsWith<IllegalArgumentException> { db.stageRestore(future) }
+            assertFalse(Files.exists(root.resolve("live.db.restore-pending")))
+        }
+    }
+
+    @Test
     fun portableNameUsesSafeCharacters() {
         assertEquals(
             "PATISSERIE_POS_Backup_2026-08-29_213000.zip",
@@ -38,7 +58,7 @@ class DesktopBackupServiceTest {
             WindowsPosDatabase.open(sourcePaths.database).use { db ->
                 db.settings.put(AppSetting("establishment_name", "Café Atlas"))
                 db.settings.put(AppSetting("customer_printer", "Receipt Printer"))
-                db.categories.save(Category(90, "Spécialités", true, 0))
+                db.categories.save(Category(90, "Spécialités", true, 0, imagePath = image.toString()))
                 db.products.save(Product(90, 90, "Café Atlas", 2500, 2000, true, true, image.toString()))
                 DesktopBackupService(db, sourcePaths, DesktopPlatform.LINUX) { Instant.parse("2026-08-29T21:30:00Z") }
                     .createBackup(archive)
@@ -56,6 +76,9 @@ class DesktopBackupServiceTest {
                 assertTrue(product.imagePath!!.startsWith(destinationPaths.images.toString()))
                 assertTrue(Files.exists(Path.of(product.imagePath!!)))
                 assertTrue(Files.readAllBytes(Path.of(product.imagePath!!)).contentEquals(byteArrayOf(1, 3, 5, 7)))
+                val categoryImage = restored.categories.findById(90)!!.imagePath!!
+                assertTrue(categoryImage.startsWith(destinationPaths.images.toString()))
+                assertTrue(Files.exists(Path.of(categoryImage)))
             }
         } finally {
             sourceRoot.toFile().deleteRecursively()

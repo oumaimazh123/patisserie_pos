@@ -32,8 +32,8 @@ class EscPosVfdDriver : VfdProtocolDriver {
     }
 
     override fun testMessage(columns: Int): ByteArray {
-        val l1 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
-        val l2 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
+        val l1 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
+        val l2 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
         return writeLines(FormattedDisplayLines(l1, l2), columns)
     }
 }
@@ -61,8 +61,8 @@ class Cd5220VfdDriver : VfdProtocolDriver {
     }
 
     override fun testMessage(columns: Int): ByteArray {
-        val l1 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
-        val l2 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
+        val l1 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
+        val l2 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
         return writeLines(FormattedDisplayLines(l1, l2), columns)
     }
 }
@@ -92,8 +92,8 @@ class Dsp800VfdDriver : VfdProtocolDriver {
     }
 
     override fun testMessage(columns: Int): ByteArray {
-        val l1 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
-        val l2 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
+        val l1 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
+        val l2 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
         return writeLines(FormattedDisplayLines(l1, l2), columns)
     }
 }
@@ -123,8 +123,8 @@ class UtcStandardVfdDriver : VfdProtocolDriver {
     }
 
     override fun testMessage(columns: Int): ByteArray {
-        val l1 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
-        val l2 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
+        val l1 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
+        val l2 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
         return writeLines(FormattedDisplayLines(l1, l2), columns)
     }
 }
@@ -149,8 +149,8 @@ class PlainTextVfdDriver : VfdProtocolDriver {
     }
 
     override fun testMessage(columns: Int): ByteArray {
-        val l1 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
-        val l2 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
+        val l1 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_1, columns)
+        val l2 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_2, columns)
         return writeLines(FormattedDisplayLines(l1, l2), columns)
     }
 }

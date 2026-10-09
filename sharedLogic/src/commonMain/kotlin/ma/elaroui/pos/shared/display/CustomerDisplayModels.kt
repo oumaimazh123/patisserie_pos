@@ -88,7 +88,7 @@ data class CustomerDisplayConfig(
     val columns: Int = 20,
     val rows: Int = 2,
     val welcomeLine1: String = "BIENVENUE",
-    val welcomeLine2: String = "HYPER CAISSE",
+    val welcomeLine2: String = "",
     val thankYouLine1: String = "MERCI POUR VOTRE",
     val thankYouLine2: String = "VISITE",
     val thankYouDurationSeconds: Int = 5
@@ -97,7 +97,7 @@ data class CustomerDisplayConfig(
 sealed interface CustomerDisplayState {
     data class Idle(
         val line1: String = "BIENVENUE",
-        val line2: String = "HYPER CAISSE"
+        val line2: String = ""
     ) : CustomerDisplayState
 
     data class DuringSale(

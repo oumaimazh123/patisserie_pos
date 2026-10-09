@@ -73,6 +73,13 @@ class CustomerDisplayController(
         if (!oldConfig.enabled || oldConfig.portName != newConfig.portName || oldConfig.protocol != newConfig.protocol) {
             connectInternal(newConfig)
         }
+        val currentState = _state.value
+        if (currentState is CustomerDisplayState.Idle) {
+            _state.value = CustomerDisplayState.Idle(
+                line1 = newConfig.welcomeLine1,
+                line2 = newConfig.welcomeLine2
+            )
+        }
         dispatchStateToHardware(_state.value)
     }
 
@@ -206,8 +213,8 @@ class CustomerDisplayController(
 
         val driver = VfdDriverRegistry.getDriver(cfg.protocol)
         val testLines = FormattedDisplayLines(
-            line1 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_1, cfg.columns),
-            line2 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_2, cfg.columns)
+            line1 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_1, cfg.columns),
+            line2 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_2, cfg.columns)
         )
 
         val success = mutex.withLock {

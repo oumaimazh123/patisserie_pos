@@ -32,8 +32,8 @@ class VfdFormattingAndProtocolTest {
         val result = VfdMessageFormatter.format(state, defaultConfig)
         assertEquals(20, result.line1.length)
         assertEquals(20, result.line2.length)
-        assertEquals("BIENVENUE".padEnd(20, ' '), result.line1)
-        assertEquals("HYPER CAISSE".padEnd(20, ' '), result.line2)
+        assertEquals("     BIENVENUE      ", result.line1)
+        assertEquals("    HYPER CAISSE    ", result.line2)
     }
 
     // Test 30: Price alignment (label left, amount right)
@@ -143,13 +143,65 @@ class VfdFormattingAndProtocolTest {
 
     @Test
     fun testTestMessageFormattingAndLengthLimits() {
-        val line1 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_1, 20)
-        val line2 = VfdMessageFormatter.fitLine(CustomerDisplayDefaults.TEST_LINE_2, 20)
+        val line1 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_1, 20)
+        val line2 = VfdMessageFormatter.centerLine(CustomerDisplayDefaults.TEST_LINE_2, 20)
 
         assertEquals(20, line1.length)
         assertEquals(20, line2.length)
-        assertEquals("AURA CAISSE         ", line1)
+        assertEquals("    AURA CAISSE     ", line1)
         assertEquals("BY ZAKARIA EL EAROUI", line2)
+    }
+
+    @Test
+    fun testCenterLineLogicAndWidthHandling() {
+        // "AURA CAISSE": length 11 -> (20 - 11) / 2 = 4 left, 5 right
+        val aura = VfdMessageFormatter.centerLine("AURA CAISSE", 20)
+        assertEquals(20, aura.length)
+        assertEquals("    AURA CAISSE     ", aura)
+
+        // "BY ZAKARIA EL EAROUI": length 20 -> exactly 20 chars
+        val author = VfdMessageFormatter.centerLine("BY ZAKARIA EL EAROUI", 20)
+        assertEquals(20, author.length)
+        assertEquals("BY ZAKARIA EL EAROUI", author)
+
+        // "BIENVENUE": length 9 -> (20 - 9) / 2 = 5 left, 6 right
+        val bienvenue = VfdMessageFormatter.centerLine("BIENVENUE", 20)
+        assertEquals(20, bienvenue.length)
+        assertEquals("     BIENVENUE      ", bienvenue)
+
+        // Establishment name: "Patisserie Atlas": length 16 -> (20 - 16) / 2 = 2 left, 2 right
+        val estName = VfdMessageFormatter.centerLine("Patisserie Atlas", 20)
+        assertEquals(20, estName.length)
+        assertEquals("  Patisserie Atlas  ", estName)
+
+        // French accented establishment name: "Pâtisserie Étoile" -> "Patisserie Etoile" (17 chars) -> 1 left, 2 right
+        val accentedEst = VfdMessageFormatter.centerLine("Pâtisserie Étoile", 20)
+        assertEquals(20, accentedEst.length)
+        assertEquals(" Patisserie Etoile  ", accentedEst)
+
+        // Long establishment name exceeding 20 chars: safely truncated to 20 without crash or overflow
+        val longEst = VfdMessageFormatter.centerLine("Pâtisserie & Boulangerie Artisanale", 20)
+        assertEquals(20, longEst.length)
+        assertEquals("Patisserie & Boulang", longEst)
+
+        // Empty string
+        val empty = VfdMessageFormatter.centerLine("", 20)
+        assertEquals(20, empty.length)
+        assertEquals("                    ", empty)
+    }
+
+    @Test
+    fun testDynamicEstablishmentNameOnIdleDisplay() {
+        val config = CustomerDisplayConfig(
+            columns = 20,
+            rows = 2,
+            welcomeLine1 = "BIENVENUE",
+            welcomeLine2 = "Pâtisserie Royale"
+        )
+        val state = CustomerDisplayState.Idle(line1 = "", line2 = "")
+        val formatted = VfdMessageFormatter.format(state, config)
+        assertEquals("     BIENVENUE      ", formatted.line1)
+        assertEquals(" Patisserie Royale  ", formatted.line2)
     }
 
     @Test

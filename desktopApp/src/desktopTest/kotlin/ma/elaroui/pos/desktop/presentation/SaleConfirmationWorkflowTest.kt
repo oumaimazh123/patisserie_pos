@@ -270,4 +270,58 @@ class SaleConfirmationWorkflowTest {
             db.close()
         }
     }
+
+    @Test
+    fun test06_saleCompletedDialog_primaryPrintAndSecondaryFinishWorkflows(): Unit = runBlocking {
+        val (db, state, printer) = setupNavEnvironment()
+        try {
+            val owner = db.allUsers().first()
+            state.login(owner, "1234")
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+            val catId = db.categories.save(Category(0, "Tartes", active = true, displayOrder = 1))
+            val prodId = db.products.save(Product(0, catId, "Tarte Pommes", 12_00L, 1000, active = true))
+            state.refresh()
+
+            // Workflow A: Primary button (Imprimer le reçu) prints directly and returns to POS_MAIN
+            state.cart[prodId] = 1
+            state.createOrder()
+            state.pay(PaymentMethod.CASH, 15_00L)
+
+            val confirm1 = assertNotNull(state.completedSaleConfirmation)
+            val initialPrints = printer.rawPrintCount
+
+            // Simulate clicking primary "Imprimer le reçu"
+            val printRes = state.printCompletedSaleReceipt(confirm1)
+            assertTrue(printRes.success, "Primary action Imprimer le reçu must succeed")
+            assertEquals(initialPrints + 1, printer.rawPrintCount, "Primary action must trigger thermal print")
+            state.completedSaleConfirmation = null
+            state.pendingOrder = null
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertNull(state.completedSaleConfirmation)
+            assertTrue(state.cart.isEmpty())
+
+            // Workflow B: Secondary button (Terminer) returns to POS_MAIN without printing
+            state.cart[prodId] = 2
+            state.createOrder()
+            state.pay(PaymentMethod.CARD, 24_00L)
+
+            assertNotNull(state.completedSaleConfirmation)
+            val printsBeforeFinish = printer.rawPrintCount
+
+            // Simulate clicking secondary "Terminer"
+            state.completedSaleConfirmation = null
+            state.pendingOrder = null
+            state.navigateTo(DesktopScreenRoute.POS_MAIN)
+
+            assertEquals(printsBeforeFinish, printer.rawPrintCount, "Secondary action Terminer must NOT trigger printing")
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertNull(state.completedSaleConfirmation)
+            assertTrue(state.cart.isEmpty())
+        } finally {
+            db.close()
+        }
+    }
 }

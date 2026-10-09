@@ -2301,7 +2301,7 @@ fun SaleCompletedDialog(
                 onClick = {
                     if (!isProcessing) {
                         isProcessing = true
-                        onFinish()
+                        onPrintReceipt()
                     }
                 },
                 enabled = !isProcessing,
@@ -2312,7 +2312,7 @@ fun SaleCompletedDialog(
                     .pointerHoverIcon(PointerIcon.Hand)
             ) {
                 Text(
-                    "✓ " + strings.finishAction,
+                    "🖨️ " + strings.printReceipt,
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )
@@ -2323,7 +2323,7 @@ fun SaleCompletedDialog(
                 onClick = {
                     if (!isProcessing) {
                         isProcessing = true
-                        onPrintReceipt()
+                        onFinish()
                     }
                 },
                 enabled = !isProcessing,
@@ -2335,7 +2335,7 @@ fun SaleCompletedDialog(
                     .pointerHoverIcon(PointerIcon.Hand)
             ) {
                 Text(
-                    "🖨️ " + strings.printReceipt,
+                    "✓ " + strings.finishAction,
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )

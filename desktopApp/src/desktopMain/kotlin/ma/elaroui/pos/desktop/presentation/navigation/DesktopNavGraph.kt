@@ -228,7 +228,7 @@ class DesktopNavState(
         if (candidate.isNotBlank()) {
             return@runBlocking candidate
         }
-        if (isWindows) "" else PrinterService.DEFAULT_LINUX_POS_QUEUE
+        ""
     }
 
     suspend fun checkStartupPrinterHealth() = withContext(Dispatchers.IO) {

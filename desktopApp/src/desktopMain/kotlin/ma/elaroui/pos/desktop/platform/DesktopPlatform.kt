@@ -49,11 +49,7 @@ data class DesktopApplicationPaths(
             return
         }
         val parentDir = root.parent ?: return
-        val legacyNames = when (DesktopPlatform.detect()) {
-            DesktopPlatform.WINDOWS -> listOf("PatisseriePOS")
-            DesktopPlatform.LINUX -> listOf("patisserie-pos")
-            DesktopPlatform.UNSUPPORTED -> emptyList()
-        }
+        val legacyNames = listOf("PatisseriePOS", "patisserie-pos")
         for (legacy in legacyNames) {
             val candidateRoot = parentDir.resolve(legacy)
             val candidateDb = candidateRoot.resolve("data").resolve("pos.db")

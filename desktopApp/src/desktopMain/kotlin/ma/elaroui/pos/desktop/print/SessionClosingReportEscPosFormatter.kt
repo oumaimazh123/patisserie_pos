@@ -32,9 +32,6 @@ object SessionClosingReportEscPosFormatter {
                 appendLine(center(it, width))
             }
             appendLine(center(title, width))
-            if (isReprint) {
-                appendLine(center("*** DUPLICATA / REIMPRESSION ***", width))
-            }
             appendLine(if (type == SessionReportType.DETAILED) singleDivider else doubleDivider)
             appendLine()
             val sessionLabel = if (type == SessionReportType.DETAILED) "Session :" else "Session N° :"
@@ -53,28 +50,28 @@ object SessionClosingReportEscPosFormatter {
                 } else {
                     report.sales.forEachIndexed { index, sale ->
                         if (index > 0) {
-                            appendLine()
                             appendLine(singleDivider)
-                            appendLine()
                         }
                         val orderHeader = when {
                             sale.orderNumber.startsWith("Commande", ignoreCase = true) -> sale.orderNumber
                             sale.orderNumber.startsWith("#") -> "Commande ${sale.orderNumber}"
                             else -> "Commande #${sale.orderNumber}"
                         }
-                        appendLine(orderHeader)
                         val dateStr = dateFormat.format(Date(sale.paidAtEpochMilliseconds))
-                        appendLine(dateStr)
+                        val headerLine = if (orderHeader.length + dateStr.length + 1 <= width) {
+                            columns(orderHeader, dateStr, width)
+                        } else {
+                            "$orderHeader\n$dateStr"
+                        }
+                        appendLine(headerLine)
                         val paymentMethodsStr = sale.paymentMethods.joinToString(" + ", transform = ::paymentLabel)
                         if (paymentMethodsStr.isNotBlank()) {
                             appendLine("Paiement : $paymentMethodsStr")
                         }
-                        appendLine()
                         if (sale.items.isNotEmpty()) {
                             sale.items.forEach { item ->
                                 appendLine("${item.quantity} x ${item.productName}")
                             }
-                            appendLine()
                         }
                         appendLine("Total commande : ${money(sale.totalCentimes)}")
                     }
@@ -172,7 +169,24 @@ object SessionClosingReportEscPosFormatter {
         output.write("$title\n".toByteArray(FrenchEscPosEncoder.CHARSET))
         output.write(EscPosCommands.BOLD_OFF)
         output.write(EscPosCommands.ALIGN_LEFT)
-        output.write(body.substringAfter("$title\n", body).toByteArray(FrenchEscPosEncoder.CHARSET))
+        val bodyAfterTitle = body.substringAfter("$title\n", body)
+        val expectedCashLine = columns("ESPECES ATTENDUES :", money(report.expectedCashCentimes), width)
+
+        if (bodyAfterTitle.contains(expectedCashLine)) {
+            val beforeExpected = bodyAfterTitle.substringBefore(expectedCashLine)
+            val afterExpected = bodyAfterTitle.substringAfter(expectedCashLine).removePrefix("\n")
+            output.write(beforeExpected.toByteArray(FrenchEscPosEncoder.CHARSET))
+            output.write(EscPosCommands.BOLD_ON)
+            output.write(EscPosCommands.DOUBLE_HEIGHT)
+            output.write(expectedCashLine.toByteArray(FrenchEscPosEncoder.CHARSET))
+            output.write('\n'.code)
+            output.write(EscPosCommands.NORMAL_SIZE)
+            output.write(EscPosCommands.BOLD_OFF)
+            output.write(afterExpected.toByteArray(FrenchEscPosEncoder.CHARSET))
+        } else {
+            output.write(bodyAfterTitle.toByteArray(FrenchEscPosEncoder.CHARSET))
+        }
+
         output.write(EscPosCommands.FEED_AND_CUT)
         EscPosFormatResult.Success(output.toByteArray())
     }.getOrElse {

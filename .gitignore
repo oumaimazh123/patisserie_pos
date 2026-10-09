@@ -30,3 +30,4 @@ local.properties
 *.pfx
 **/private_key.pem
 tools/license-generator/generated/
+release-windows-*/

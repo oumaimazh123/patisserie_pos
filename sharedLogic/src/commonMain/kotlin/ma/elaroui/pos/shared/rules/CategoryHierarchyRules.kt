@@ -115,13 +115,10 @@ object CategoryHierarchyRules {
     fun validateCategoryHierarchy(
         category: Category,
         allCategories: List<Category>,
-        requireImage: Boolean = true
+        @Suppress("UNUSED_PARAMETER") requireImage: Boolean = false
     ): Result<Unit> {
         if (category.name.isBlank()) {
             return Result.failure(IllegalArgumentException(ERROR_NAME_REQUIRED))
-        }
-        if (requireImage && category.imagePath.isNullOrBlank()) {
-            return Result.failure(IllegalArgumentException(ERROR_IMAGE_REQUIRED))
         }
 
         // Self-parenting check

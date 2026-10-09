@@ -40,7 +40,9 @@ fun PaymentScreen(
     onBack: () -> Unit,
     message: String = "",
     uiMessage: UiMessage? = null,
-    onClearMessage: () -> Unit = {}
+    onClearMessage: () -> Unit = {},
+    onCashAmountChanged: ((receivedCentimes: Long?, changeCentimes: Long) -> Unit)? = null,
+    onPaymentMethodChanged: ((PaymentMethod) -> Unit)? = null
 ) {
     var selectedMethod by remember { mutableStateOf(PaymentMethod.CASH) }
     var receivedCashInput by remember { mutableStateOf("") }
@@ -49,6 +51,14 @@ fun PaymentScreen(
     val parsedCash = (MoneyRules.parseToCentimes(receivedCashInput) as? MoneyParseResult.Success)?.centimes
     val changeCentimes = if (parsedCash != null && parsedCash > orderTotalCentimes) parsedCash - orderTotalCentimes else 0L
     val remainingCentimes = if (parsedCash == null || parsedCash < orderTotalCentimes) orderTotalCentimes - (parsedCash ?: 0L) else 0L
+
+    LaunchedEffect(parsedCash, changeCentimes) {
+        onCashAmountChanged?.invoke(parsedCash, changeCentimes)
+    }
+
+    LaunchedEffect(selectedMethod) {
+        onPaymentMethodChanged?.invoke(selectedMethod)
+    }
 
     val isPaymentValid = selectedMethod != PaymentMethod.CASH || (parsedCash != null && parsedCash >= orderTotalCentimes)
 

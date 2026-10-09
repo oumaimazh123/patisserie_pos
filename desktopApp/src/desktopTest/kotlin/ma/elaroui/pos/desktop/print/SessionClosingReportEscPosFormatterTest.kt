@@ -155,7 +155,8 @@ class SessionClosingReportEscPosFormatterTest {
         val textSummary = String(formatSummary.bytes, FrenchEscPosEncoder.CHARSET)
 
         assertTrue(textSummary.contains("RAPPORT DE CLOTURE - RESUME"))
-        assertTrue(textSummary.contains("*** DUPLICATA / REIMPRESSION ***"))
+        assertFalse(textSummary.contains("DUPLICATA"), "Report must not contain DUPLICATA")
+        assertFalse(textSummary.contains("REIMPRESSION"), "Report must not contain REIMPRESSION")
         assertTrue(textSummary.contains("Session N° :"))
         assertTrue(textSummary.contains("Caissier :"))
         assertTrue(textSummary.contains("Nombre de ventes :"))
@@ -190,6 +191,60 @@ class SessionClosingReportEscPosFormatterTest {
         assertFalse(textWithCashIn.contains("Sorties espèces :"))
         // Expected cash = 150 + 50 = 200 DH
         assertTrue(textWithCashIn.contains("200,00 DH"))
+    }
+
+    @Test
+    fun `expected cash is styled in bold and double height in binary output`() {
+        val sample = report()
+        val formatResult = assertIs<EscPosFormatResult.Success>(
+            SessionClosingReportEscPosFormatter.format(sample, "Pâtisserie Royale", 80)
+        )
+        val bytes = formatResult.bytes
+        val expectedCashAscii = "ESPECES ATTENDUES :".toByteArray(FrenchEscPosEncoder.CHARSET)
+
+        fun indexOf(pattern: ByteArray): Int {
+            for (i in 0..bytes.size - pattern.size) {
+                if (pattern.indices.all { bytes[i + it] == pattern[it] }) return i
+            }
+            return -1
+        }
+
+        val textIdx = indexOf(expectedCashAscii)
+        assertTrue(textIdx > 0, "ESPECES ATTENDUES must be present in output")
+
+        // Right before expectedCashAscii, BOLD_ON and DOUBLE_HEIGHT must be set
+        val boldOn = EscPosCommands.BOLD_ON
+        val doubleHeight = EscPosCommands.DOUBLE_HEIGHT
+        val normalSize = EscPosCommands.NORMAL_SIZE
+        val boldOff = EscPosCommands.BOLD_OFF
+
+        // Check boldOn and doubleHeight exist immediately prior to text
+        val prefixSlice = bytes.sliceArray((textIdx - boldOn.size - doubleHeight.size) until textIdx)
+        assertContentEquals(boldOn + doubleHeight, prefixSlice, "BOLD_ON and DOUBLE_HEIGHT must precede ESPECES ATTENDUES")
+
+        // Right after expected cash line and newline, NORMAL_SIZE and BOLD_OFF must be restored
+        var lineEndIdx = textIdx
+        while (lineEndIdx < bytes.size && bytes[lineEndIdx] != 0x0A.toByte()) {
+            lineEndIdx++
+        }
+        assertTrue(lineEndIdx > textIdx, "Newline must follow expected cash line")
+        val suffixSlice = bytes.sliceArray((lineEndIdx + 1) until (lineEndIdx + 1 + normalSize.size + boldOff.size))
+        assertContentEquals(normalSize + boldOff, suffixSlice, "NORMAL_SIZE and BOLD_OFF must follow ESPECES ATTENDUES")
+    }
+
+    @Test
+    fun `detailed report ventes payees is compact and has no duplicata on reprint`() {
+        val sample = report()
+        val formatResult = assertIs<EscPosFormatResult.Success>(
+            SessionClosingReportEscPosFormatter.format(sample, "Pâtisserie Royale", 80, type = SessionReportType.DETAILED, isReprint = true)
+        )
+        val text = String(formatResult.bytes, FrenchEscPosEncoder.CHARSET)
+
+        assertFalse(text.contains("DUPLICATA"), "Must not contain DUPLICATA")
+        assertFalse(text.contains("REIMPRESSION"), "Must not contain REIMPRESSION")
+        assertTrue(text.contains("VENTES PAYÉES"))
+        assertTrue(text.contains("Commande #SALE-1"))
+        assertTrue(text.contains("Total commande : 10,00 DH"))
     }
 
     private fun report() = SessionClosingReport(

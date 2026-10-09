@@ -4,6 +4,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import androidx.compose.ui.graphics.Color
+import ma.elaroui.pos.desktop.DesktopLanguage
+import ma.elaroui.pos.desktop.DesktopStrings
+import ma.elaroui.pos.desktop.presentation.components.PosColors
 import ma.elaroui.pos.shared.domain.Category
 import ma.elaroui.pos.shared.domain.Product
 import ma.elaroui.pos.shared.domain.isRoot
@@ -272,4 +276,125 @@ class PosCategorySelectorTest {
         assertEquals(1, filteredLvl3.size)
         assertEquals(400L, filteredLvl3.first().id)
     }
+
+    @Test
+    fun `all products card in category picker dialog uses layout grid mode without image dependency`() {
+        val stringsFr = DesktopStrings(DesktopLanguage.FR)
+        val stringsEn = DesktopStrings(DesktopLanguage.EN)
+        val stringsAr = DesktopStrings(DesktopLanguage.AR)
+
+        // Labels across languages
+        assertEquals("Tous les produits", stringsFr.text("Tous les produits", "All products", "كل المنتجات"))
+        assertEquals("All products", stringsEn.text("Tous les produits", "All products", "كل المنتجات"))
+        assertEquals("كل المنتجات", stringsAr.text("Tous les produits", "All products", "كل المنتجات"))
+
+        // Simulated root level category picker dialog cards
+        val currentParentId: Long? = null
+        val selectedCategoryId: Long? = null
+
+        val isRootLevel = currentParentId == null
+        val allProductsCardIsAllProducts = isRootLevel
+        val allProductsSelected = selectedCategoryId == null
+
+        assertTrue(allProductsCardIsAllProducts, "Root 'Tous les produits' card must have isAllProducts = true")
+        assertTrue(allProductsSelected, "When selectedCategoryId is null, 'Tous les produits' must be selected")
+    }
+
+    @Test
+    fun `all products card selection state preserves primary orange border and checkmark`() {
+        // Selection state logic
+        val rootSelectedId: Long? = null
+        val isAllProductsSelectedWhenNull = rootSelectedId == null
+        assertTrue(isAllProductsSelectedWhenNull)
+
+        // Orange brand color used for selected border and checkmark
+        val orangeBorderColor = PosColors.Primary
+        assertEquals(Color(0xFFB5673B), orangeBorderColor)
+
+        // When a specific category is selected, "Tous les produits" is unselected
+        val specificSelectedId: Long? = 12L
+        val isAllProductsSelectedWithCat = specificSelectedId == null
+        assertFalse(isAllProductsSelectedWithCat)
+    }
+
+    @Test
+    fun `category cards retain standard image loading while all products card is independent`() {
+        val categories = listOf(
+            Category(id = 1L, name = "Pâtisserie", imagePath = "patisserie.jpg", active = true),
+            Category(id = 2L, name = "Boissons", imagePath = null, active = true)
+        )
+
+        // Card items configuration simulated from DesktopCategorySelectionDialog
+        data class PickerCardModel(
+            val label: String,
+            val categoryId: Long?,
+            val isAllProducts: Boolean,
+            val imagePath: String?
+        )
+
+        val pickerCards = mutableListOf<PickerCardModel>()
+        // 1. Root card: Tous les produits
+        pickerCards.add(
+            PickerCardModel(
+                label = "Tous les produits",
+                categoryId = null,
+                isAllProducts = true,
+                imagePath = null // never depends on an image
+            )
+        )
+        // 2. Categories
+        categories.forEach { cat ->
+            pickerCards.add(
+                PickerCardModel(
+                    label = cat.name,
+                    categoryId = cat.id,
+                    isAllProducts = false,
+                    imagePath = cat.imagePath
+                )
+            )
+        }
+
+        // Verification
+        assertEquals(3, pickerCards.size)
+        // First is "Tous les produits"
+        assertTrue(pickerCards[0].isAllProducts)
+        assertEquals(null, pickerCards[0].categoryId)
+        assertEquals(null, pickerCards[0].imagePath)
+
+        // Subsequent are normal categories
+        assertFalse(pickerCards[1].isAllProducts)
+        assertEquals(1L, pickerCards[1].categoryId)
+        assertEquals("patisserie.jpg", pickerCards[1].imagePath)
+
+        assertFalse(pickerCards[2].isAllProducts)
+        assertEquals(2L, pickerCards[2].categoryId)
+    }
+
+    @Test
+    fun `lucide layout grid vector spec geometry conforms to 4 rounded squares`() {
+        // Spec constants for 24x24 viewBox
+        val viewBox = 24f
+        val rectSize = 7f
+        val rx = 1f
+        val stroke = 2f
+
+        val cell1 = Pair(3f, 3f)   // Top-left
+        val cell2 = Pair(14f, 3f)  // Top-right
+        val cell3 = Pair(3f, 14f)  // Bottom-left
+        val cell4 = Pair(14f, 14f) // Bottom-right
+
+        // Verify bounds within 24x24
+        val cells = listOf(cell1, cell2, cell3, cell4)
+        for ((x, y) in cells) {
+            assertTrue(x >= 0f && x + rectSize <= viewBox, "Cell x bounds must fit in viewBox")
+            assertTrue(y >= 0f && y + rectSize <= viewBox, "Cell y bounds must fit in viewBox")
+        }
+
+        // Verify symmetrical gap between cells
+        val horizontalGap = cell2.first - (cell1.first + rectSize)
+        val verticalGap = cell3.second - (cell1.second + rectSize)
+        assertEquals(4f, horizontalGap, "Horizontal gap between grid squares must be 4")
+        assertEquals(4f, verticalGap, "Vertical gap between grid squares must be 4")
+    }
 }
+

@@ -22,6 +22,7 @@ import ma.elaroui.pos.desktop.presentation.components.PosColors
 enum class SettingsTab {
     ESTABLISHMENT,
     PRINTERS,
+    CUSTOMER_DISPLAY,
     BACKUP_RESTORE,
     DATA_MANAGEMENT,
     LICENSE
@@ -33,6 +34,7 @@ fun SettingsTabBar(
     strings: DesktopStrings,
     onNavigateToEstablishment: () -> Unit,
     onNavigateToPrinters: () -> Unit,
+    onNavigateToCustomerDisplay: () -> Unit = {},
     onNavigateToBackupRestore: () -> Unit,
     onNavigateToDataManagement: () -> Unit = {},
     onNavigateToLicense: () -> Unit
@@ -60,6 +62,12 @@ fun SettingsTabBar(
                 title = "🖨️ " + strings.printersTitle,
                 isSelected = selectedTab == SettingsTab.PRINTERS,
                 onClick = onNavigateToPrinters
+            )
+
+            SettingsTabItem(
+                title = "📟 " + strings.text("Afficheur client", "Customer Display", "شاشة الزبون"),
+                isSelected = selectedTab == SettingsTab.CUSTOMER_DISPLAY,
+                onClick = onNavigateToCustomerDisplay
             )
 
             SettingsTabItem(

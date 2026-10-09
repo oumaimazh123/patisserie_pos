@@ -25,9 +25,6 @@ echo -e "${COLOR_CYAN}       PATISSERIE_POS - Data Management & Cleanup     ${CO
 echo -e "${COLOR_CYAN}======================================================${COLOR_RESET}"
 
 DATA_DIR="$HOME/.local/share/patisserie-pos"
-if [ ! -d "$DATA_DIR" ] && [ -d "$HOME/.local/share/general-pos" ]; then
-    DATA_DIR="$HOME/.local/share/general-pos"
-fi
 CONFIG_DIR="$HOME/.config/patisserie-pos"
 CACHE_DIR="$HOME/.cache/patisserie-pos"
 TEMP_DIR="/tmp/patisserie-pos"
@@ -37,12 +34,10 @@ BACKUP_DIR="$HOME/patisserie_pos_backup_$TIMESTAMP"
 
 # 1. Check if application is running and terminate safely
 echo -e "\n${COLOR_YELLOW}Verifying running processes...${COLOR_RESET}"
-if pgrep -f "patisserie-pos" > /dev/null || pgrep -f "PATISSERIE_POS" > /dev/null || pgrep -f "general-pos" > /dev/null || pgrep -f "General POS" > /dev/null; then
+if pgrep -f "patisserie-pos" > /dev/null || pgrep -f "PATISSERIE_POS" > /dev/null; then
     echo "Stopping application process..."
     killall "PATISSERIE_POS" 2>/dev/null || true
-    killall "General POS" 2>/dev/null || true
     pkill -f "patisserie-pos" 2>/dev/null || true
-    pkill -f "general-pos" 2>/dev/null || true
     sleep 1
 fi
 

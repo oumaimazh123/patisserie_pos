@@ -237,4 +237,32 @@ class CsvImportsTest {
         assertTrue(analysis.canImport)
         assertEquals(3, analysis.imagesFoundCount)
     }
+
+    @Test
+    fun `client ready import folder on desktop is fully valid and imports cleanly`() {
+        val desktopCsv = java.nio.file.Path.of("C:/Users/zakar/Desktop/patisserie_pos_client_import/import.csv")
+        assertTrue(Files.exists(desktopCsv), "import.csv must exist on Desktop")
+
+        val analysis = CsvImports.analyzeCatalogCsv(desktopCsv)
+        assertEquals(81, analysis.totalRows)
+        assertEquals(81, analysis.validRows.size)
+        assertTrue(analysis.errors.isEmpty(), "Expected 0 errors, got: ${analysis.errors}")
+        assertTrue(analysis.warnings.isEmpty(), "Expected 0 warnings, got: ${analysis.warnings}")
+        assertTrue(analysis.canImport)
+        assertEquals(3, analysis.categoriesCountByLevel[1])
+        assertEquals(15, analysis.categoriesCountByLevel[2])
+        assertEquals(0, analysis.imagesMissingCount)
+
+        val dir = Files.createTempDirectory("client-import-exec-test")
+        ma.elaroui.pos.desktop.persistence.WindowsPosDatabase.open(dir.resolve("pos.db")).use { db ->
+            db.configureInitialSetup("Pâtisserie Test", "Admin", "1234")
+            val state = ma.elaroui.pos.desktop.presentation.navigation.DesktopNavState(db, dir)
+            val summary = state.executeCatalogImport(analysis, desktopCsv)
+            assertEquals(81, summary.imported)
+            assertEquals(0, summary.failed)
+            assertEquals(0, summary.errors.size)
+            assertEquals(18, state.categories.size)
+            assertEquals(81, state.products.size)
+        }
+    }
 }

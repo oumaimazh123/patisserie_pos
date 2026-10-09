@@ -14,9 +14,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -200,3 +202,36 @@ private suspend fun animateFling(state: ScrollableState, initialVelocity: Float)
     }
 }
 
+/**
+ * Smooth mouse wheel scrolling modifier with configurable sensitivity multiplier.
+ * Intercepts PointerEventType.Scroll in PointerEventPass.Initial and dispatches
+ * adjusted scroll deltas to the ScrollableState while consuming the event to prevent
+ * duplicate scrolling from built-in scrollable listeners.
+ *
+ * Does not intercept press/drag gestures, keeping touch gestures 100% responsive.
+ */
+fun Modifier.mouseWheelScroll(
+    state: ScrollableState,
+    multiplier: Float = 0.75f,
+    enabled: Boolean = true
+): Modifier = composed {
+    if (!enabled) return@composed this
+
+    this.pointerInput(state, multiplier) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                if (event.type == PointerEventType.Scroll) {
+                    val totalDeltaY = event.changes.fold(0f) { acc, change ->
+                        acc + change.scrollDelta.y
+                    }
+                    if (totalDeltaY != 0f) {
+                        event.changes.forEach { it.consume() }
+                        val scrollPixels = totalDeltaY * 64.dp.toPx() * multiplier
+                        state.dispatchRawDelta(scrollPixels)
+                    }
+                }
+            }
+        }
+    }
+}

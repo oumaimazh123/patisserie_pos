@@ -84,4 +84,29 @@ class ProductImageRenderingTest {
         }.getOrNull()
         assertNull(bitmap2)
     }
+
+    @Test
+    fun testNullAndBlankImagePathsDoNotThrowAndReturnNull() {
+        val nullPath: String? = null
+        val nullResult = runCatching {
+            nullPath?.takeIf { it.isNotBlank() }?.let { path ->
+                val file = File(path)
+                if (file.exists() && file.isFile) {
+                    SkiaImage.makeFromEncoded(file.readBytes())?.toComposeImageBitmap()
+                } else null
+            }
+        }.getOrNull()
+        assertNull(nullResult)
+
+        val blankPath = "   "
+        val blankResult = runCatching {
+            blankPath.takeIf { it.isNotBlank() }?.let { path ->
+                val file = File(path)
+                if (file.exists() && file.isFile) {
+                    SkiaImage.makeFromEncoded(file.readBytes())?.toComposeImageBitmap()
+                } else null
+            }
+        }.getOrNull()
+        assertNull(blankResult)
+    }
 }

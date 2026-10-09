@@ -4,10 +4,18 @@ package ma.elaroui.pos.desktop.presentation.pos.main
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -39,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ma.elaroui.pos.desktop.DesktopStrings
@@ -49,6 +58,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import ma.elaroui.pos.desktop.presentation.components.PosColors
 import ma.elaroui.pos.desktop.presentation.components.PosDimens
 import ma.elaroui.pos.desktop.presentation.components.PosUi
+import ma.elaroui.pos.desktop.presentation.components.mouseWheelScroll
 import ma.elaroui.pos.desktop.presentation.components.touchDragScroll
 import ma.elaroui.pos.desktop.presentation.components.PosSnackbar
 import ma.elaroui.pos.desktop.presentation.model.UiMessage
@@ -87,6 +97,7 @@ fun POSMainScreen(
     onItemDiscountChanged: (productId: Long, basisPoints: Int) -> Unit = { _, _ -> },
     onHoldOrder: () -> Unit,
     onProceedToPayment: () -> Unit,
+    onClearCart: (() -> Unit)? = null,
     onBarcodeScanned: (barcode: String) -> Unit = {},
     message: String = "",
     uiMessage: UiMessage? = null,
@@ -96,6 +107,7 @@ fun POSMainScreen(
     var selectedCategoryId by remember { mutableStateOf<Long?>(null) }
     var showCategoryPicker by remember { mutableStateOf(false) }
     var pickerInitialParentId by remember { mutableStateOf<Long?>(null) }
+    var showClearCartConfirmDialog by remember { mutableStateOf(false) }
 
     val focusRequester = remember { FocusRequester() }
     val scannerController = remember(onBarcodeScanned) {
@@ -418,91 +430,189 @@ fun POSMainScreen(
                         fontWeight = FontWeight.Bold,
                         color = PosColors.TextHigh
                     )
-                    if (totalItemsCount > 0) {
-                        Surface(
-                            color = PosColors.PrimaryLight,
-                            shape = RoundedCornerShape(PosDimens.RadiusPill)
-                        ) {
-                            Text(
-                                text = "$totalItemsCount ${strings.text("article(s)", "item(s)", "عنصر")}",
-                                color = PosColors.PrimaryDark,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (totalItemsCount > 0) {
+                            Surface(
+                                color = PosColors.PrimaryLight,
+                                shape = RoundedCornerShape(PosDimens.RadiusPill)
+                            ) {
+                                Text(
+                                    text = "$totalItemsCount ${strings.text("article(s)", "item(s)", "عنصر")}",
+                                    color = PosColors.PrimaryDark,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { showClearCartConfirmDialog = true },
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                            ) {
+                                Text(
+                                    text = "🗑️",
+                                    fontSize = 14.sp
+                                )
+                            }
                         }
                     }
                 }
 
+                // Confirmation dialog for clearing the cart
+                if (showClearCartConfirmDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showClearCartConfirmDialog = false },
+                        title = {
+                            Text(
+                                text = strings.text("Vider le panier ?", "Clear cart?", "إفراغ السلة؟"),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = PosColors.TextHigh
+                            )
+                        },
+                        text = {
+                            Text(
+                                text = strings.text(
+                                    "Êtes-vous sûr de vouloir supprimer tous les articles du panier en cours ?",
+                                    "Are you sure you want to remove all items from the current cart?",
+                                    "هل أنت متأكد من رغبتك في إزالة جميع العناصر من السلة الحالية؟"
+                                ),
+                                fontSize = 13.sp,
+                                color = PosColors.TextMedium
+                            )
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    if (onClearCart != null) {
+                                        onClearCart()
+                                    } else {
+                                        cartItems.forEach { (prod, _) -> onQuantityChanged(prod.id, 0) }
+                                    }
+                                    showClearCartConfirmDialog = false
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = PosColors.Danger)
+                            ) {
+                                Text(
+                                    strings.text("Vider", "Clear", "إفراغ"),
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showClearCartConfirmDialog = false }) {
+                                Text(strings.cancel)
+                            }
+                        }
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Cart Line Items List (Scrollable)
-
+                // Cart Line Items List (Scrollable with Scrollbar & Smooth Mouse Wheel)
                 val cartListState = rememberLazyListState()
-                LazyColumn(
-                    state = cartListState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .touchDragScroll(cartListState),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    if (cartItems.isEmpty()) {
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 24.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(48.dp)
-                                            .clip(CircleShape)
-                                            .background(Color.White),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text("🛒", fontSize = 22.sp)
-                                    }
-                                    Text(
-                                        strings.emptyCart,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp,
-                                        color = PosColors.TextHigh
-                                    )
-                                    Text(
-                                        strings.text(
-                                            "Cliquez sur un produit pour l'ajouter",
-                                            "Click a product to add it",
-                                            "انقر على منتج لإضافته"
-                                        ),
-                                        fontSize = 11.sp,
-                                        color = PosColors.TextMuted,
-                                        textAlign = TextAlign.Center
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        items(cartItems) { (prod, qty) ->
-                            POSCartLineItem(
-                                name = prod.name,
-                                imagePath = prod.imagePath,
-                                quantity = qty,
-                                unitPriceCentimes = prod.priceCentimes,
-                                discountBasisPoints = (itemDiscountsBasisPoints[prod.id] ?: 0).coerceIn(0, 10_000),
-                                strings = strings,
-                                onIncrease = { onQuantityChanged(prod.id, qty + 1) },
-                                onDecrease = { onQuantityChanged(prod.id, qty - 1) },
-                                onRemove = { onQuantityChanged(prod.id, 0) },
-                                onDiscountChanged = { bps -> onItemDiscountChanged(prod.id, bps) }
-                            )
+
+                // Auto-scroll only when a new product reference is added to the cart
+                var previousProductIds by remember { mutableStateOf(cart.keys.toSet()) }
+                LaunchedEffect(cart.keys.toSet()) {
+                    val currentKeys = cart.keys.toSet()
+                    val newKeys = currentKeys - previousProductIds
+                    if (newKeys.isNotEmpty() && cartItems.isNotEmpty()) {
+                        val targetIndex = cartItems.indexOfFirst { (p, _) -> p.id in newKeys }
+                        if (targetIndex >= 0) {
+                            cartListState.animateScrollToItem(targetIndex)
+                        } else {
+                            cartListState.animateScrollToItem(cartItems.lastIndex)
                         }
                     }
+                    previousProductIds = currentKeys
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    LazyColumn(
+                        state = cartListState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(end = 8.dp)
+                            .mouseWheelScroll(cartListState, multiplier = 0.75f)
+                            .touchDragScroll(cartListState),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (cartItems.isEmpty()) {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 24.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.White),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("🛒", fontSize = 22.sp)
+                                        }
+                                        Text(
+                                            strings.emptyCart,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            color = PosColors.TextHigh
+                                        )
+                                        Text(
+                                            strings.text(
+                                                "Cliquez sur un produit pour l'ajouter",
+                                                "Click a product to add it",
+                                                "انقر على منتج لإضافته"
+                                            ),
+                                            fontSize = 11.sp,
+                                            color = PosColors.TextMuted,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            items(cartItems, key = { it.first.id }) { (prod, qty) ->
+                                POSCartLineItem(
+                                    name = prod.name,
+                                    imagePath = prod.imagePath,
+                                    quantity = qty,
+                                    unitPriceCentimes = prod.priceCentimes,
+                                    discountBasisPoints = (itemDiscountsBasisPoints[prod.id] ?: 0).coerceIn(0, 10_000),
+                                    strings = strings,
+                                    onIncrease = { onQuantityChanged(prod.id, qty + 1) },
+                                    onDecrease = { onQuantityChanged(prod.id, qty - 1) },
+                                    onRemove = { onQuantityChanged(prod.id, 0) },
+                                    onDiscountChanged = { bps -> onItemDiscountChanged(prod.id, bps) }
+                                )
+                            }
+                        }
+                    }
+
+                    VerticalScrollbar(
+                        adapter = rememberScrollbarAdapter(cartListState),
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight()
+                            .padding(vertical = 4.dp),
+                        style = defaultScrollbarStyle()
+                    )
                 }
 
                 // Total Summary Card (Fixed)
@@ -816,6 +926,7 @@ private fun DesktopCategoryPickerDialog(
                     if (currentParentId == null) {
                         DesktopCategoryPickerButton(
                             label = strings.text("Tous les produits", "All products", "كل المنتجات"),
+                            isAllProducts = true,
                             selected = selectedCategoryId == null,
                             strings = strings
                         ) { onSelect(null) }
@@ -861,10 +972,68 @@ private fun DesktopCategoryPickerDialog(
     )
 }
 
+/**
+ * Lucide LayoutGrid icon: 2x2 grid of 4 rounded squares.
+ * Conforms to Lucide layout-grid vector specification (viewBox 0 0 24 24, stroke 2, rx 1).
+ */
 @Composable
-private fun DesktopCategoryPickerButton(
+internal fun LucideLayoutGridIcon(
+    modifier: Modifier = Modifier,
+    color: Color = PosColors.Primary,
+    strokeWidth: Dp = 2.dp
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val scale = w / 24f
+        val strokePx = (strokeWidth.toPx() * (w / 24.dp.toPx())).coerceAtLeast(1.5f)
+        val cornerRadius = CornerRadius(1f * scale, 1f * scale)
+        val rectSize = Size(7f * scale, 7f * scale)
+        val strokeStyle = Stroke(
+            width = strokePx,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round
+        )
+
+        // 1. Top-left
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(3f * scale, 3f * scale),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = strokeStyle
+        )
+        // 2. Top-right
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(14f * scale, 3f * scale),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = strokeStyle
+        )
+        // 3. Bottom-left
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(3f * scale, 14f * scale),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = strokeStyle
+        )
+        // 4. Bottom-right
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(14f * scale, 14f * scale),
+            size = rectSize,
+            cornerRadius = cornerRadius,
+            style = strokeStyle
+        )
+    }
+}
+
+@Composable
+internal fun DesktopCategoryPickerButton(
     label: String,
     imagePath: String? = null,
+    isAllProducts: Boolean = false,
     selected: Boolean,
     hasChildren: Boolean = false,
     strings: DesktopStrings,
@@ -913,15 +1082,31 @@ private fun DesktopCategoryPickerButton(
         elevation = CardDefaults.cardElevation(defaultElevation = animatedElevation)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            SafeProductImage(
-                imagePath = imagePath,
-                contentDescription = label,
-                placeholderText = strings.text("Aucune image", "No image", "لا توجد صورة"),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(112.dp)
-                    .clip(RoundedCornerShape(topStart = PosDimens.RadiusCard, topEnd = PosDimens.RadiusCard))
-            )
+            if (isAllProducts) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(112.dp)
+                        .clip(RoundedCornerShape(topStart = PosDimens.RadiusCard, topEnd = PosDimens.RadiusCard))
+                        .background(PosColors.Workspace),
+                    contentAlignment = Alignment.Center
+                ) {
+                    LucideLayoutGridIcon(
+                        modifier = Modifier.size(38.dp),
+                        color = PosColors.Primary
+                    )
+                }
+            } else {
+                SafeProductImage(
+                    imagePath = imagePath,
+                    contentDescription = label,
+                    placeholderText = strings.text("Aucune image", "No image", "لا توجد صورة"),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(112.dp)
+                        .clip(RoundedCornerShape(topStart = PosDimens.RadiusCard, topEnd = PosDimens.RadiusCard))
+                )
+            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()

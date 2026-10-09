@@ -57,6 +57,11 @@ jobs:
           sudo cupsenable POS_CLIENT
           sudo cupsaccept POS_CLIENT
           sudo lpstat -p -d || true
+      - name: Setup virtual digital customer display on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo touch /tmp/virtual_customer_display.bin && sudo chmod 666 /tmp/virtual_customer_display.bin
+          ls -la /tmp/virtual_customer_display.bin
       - name: Setup virtual printer on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -64,6 +69,13 @@ jobs:
           Start-Service Spooler -ErrorAction SilentlyContinue
           Add-Printer -Name "Virtual Thermal POS" -DriverName "Generic / Text Only" -PortName "nul:" -ErrorAction SilentlyContinue
           Get-Printer | Select-Object Name, DriverName, PortName
+      - name: Setup virtual digital customer display on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vfdPath = Join-Path $env:TEMP "virtual_customer_display.bin"
+          New-Item -Path $vfdPath -ItemType File -Force | Out-Null
+          Write-Host "Virtual digital customer display initialized at: $vfdPath"
       - name: Test desktop and shared logic
         run: |
           if [[ "$RUNNER_OS" == "Linux" ]]; then

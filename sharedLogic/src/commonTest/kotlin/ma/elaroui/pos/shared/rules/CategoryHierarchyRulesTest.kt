@@ -106,16 +106,30 @@ class CategoryHierarchyRulesTest {
         assertEquals(3, CategoryHierarchyRules.calculateLevel(anniversaire.id, all))
     }
 
-    // Cas 7: Chaque catégorie possède sa propre image (image obligatoire)
+    // Cas 7: Images optionnelles pour les catégories et nom obligatoire
     @Test
-    fun `case 7 - mandatory image and name validation`() {
+    fun `case 7 - optional image and mandatory name validation`() {
         val noImage = Category(id = 1L, name = "Pâtisserie", parentId = null, imagePath = null)
         val blankImage = Category(id = 1L, name = "Pâtisserie", parentId = null, imagePath = "   ")
+        val withImage = Category(id = 1L, name = "Pâtisserie", parentId = null, imagePath = "images/cat.png")
         val noName = Category(id = 1L, name = "", parentId = null, imagePath = "images/cat.png")
+        val noNameNoImage = Category(id = 1L, name = "", parentId = null, imagePath = null)
 
-        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(noImage, emptyList()).isFailure)
-        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(blankImage, emptyList()).isFailure)
+        // Images are optional: null or blank imagePath must succeed
+        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(noImage, emptyList()).isSuccess)
+        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(blankImage, emptyList()).isSuccess)
+        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(withImage, emptyList()).isSuccess)
+
+        // Name is still mandatory
         assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(noName, emptyList()).isFailure)
+        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(noNameNoImage, emptyList()).isFailure)
+
+        // Editing category with or without image succeeds
+        val editedWithoutImage = withImage.copy(name = "Pâtisserie Fine", imagePath = null)
+        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(editedWithoutImage, listOf(withImage)).isSuccess)
+
+        val editedWithImage = noImage.copy(name = "Pâtisserie Fine", imagePath = "images/new_cat.png")
+        assertTrue(CategoryHierarchyRules.validateCategoryHierarchy(editedWithImage, listOf(noImage)).isSuccess)
     }
 
     // Cas 8: Cycle direct et indirect interdit

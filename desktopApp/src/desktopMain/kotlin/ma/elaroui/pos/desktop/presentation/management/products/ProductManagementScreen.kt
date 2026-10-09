@@ -761,7 +761,7 @@ fun ProductManagementScreen(
                             taxRateBasisPoints = taxRateInput,
                             available = activeInput,
                             active = activeInput,
-                            imagePath = imagePathInput,
+                            imagePath = imagePathInput?.trim()?.ifBlank { null },
                             sku = skuInput.trim().ifBlank { null },
                             barcode = barcodeInput.trim().ifBlank { null }
                         )

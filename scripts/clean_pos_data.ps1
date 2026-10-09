@@ -23,8 +23,8 @@ Write-Host "       PATISSERIE_POS - Data Management & Cleanup     " -ForegroundC
 Write-Host "======================================================" -ForegroundColor Cyan
 
 $AppDir = "$env:LOCALAPPDATA\PATISSERIE_POS"
-if (-not (Test-Path $AppDir) -and (Test-Path "$env:LOCALAPPDATA\GeneralPOS")) {
-    $AppDir = "$env:LOCALAPPDATA\GeneralPOS"
+if (-not (Test-Path $AppDir) -and (Test-Path "$env:LOCALAPPDATA\PatisseriePOS")) {
+    $AppDir = "$env:LOCALAPPDATA\PatisseriePOS"
 }
 $TempAppDir = "$env:TEMP\PATISSERIE_POS"
 $DbPath = "$AppDir\data\pos.db"
@@ -33,7 +33,7 @@ $BackupDir = "$env:USERPROFILE\Desktop\PATISSERIE_POS_Backup_$DateTag"
 
 # 1. Check if application is running
 Write-Host "`nVerifying running processes..." -ForegroundColor Yellow
-$processes = Get-Process -Name "PATISSERIE_POS", "General POS", "patisserie-pos", "general-pos" -ErrorAction SilentlyContinue
+$processes = Get-Process -Name "PATISSERIE_POS", "PatisseriePOS", "patisserie-pos" -ErrorAction SilentlyContinue
 if ($processes) {
     Write-Host "Stopping application process..." -ForegroundColor Yellow
     $processes | Stop-Process -Force -ErrorAction SilentlyContinue

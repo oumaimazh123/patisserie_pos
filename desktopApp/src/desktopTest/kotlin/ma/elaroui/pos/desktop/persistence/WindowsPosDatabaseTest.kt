@@ -387,11 +387,15 @@ class WindowsPosDatabaseTest {
                 }
                 assertEquals("Cette catégorie est déjà au niveau 4. Une catégorie de niveau 4 ne peut pas avoir de sous-catégorie.", ex.message)
 
-                // 7. Mandatory Image validation via CategoryHierarchyRules
+                // 7. Category without image validation and persistence
                 val noImage = Category(id = 0L, name = "Sans Image", active = true, imagePath = null)
-                val imgValidation = ma.elaroui.pos.shared.rules.CategoryHierarchyRules.validateCategoryHierarchy(noImage, emptyList(), requireImage = true)
-                assertTrue(imgValidation.isFailure)
-                assertEquals("L'image de la catégorie est obligatoire.", imgValidation.exceptionOrNull()?.message)
+                val imgValidation = ma.elaroui.pos.shared.rules.CategoryHierarchyRules.validateCategoryHierarchy(noImage, emptyList())
+                assertTrue(imgValidation.isSuccess)
+                val noImageId = db.categories.save(noImage)
+                assertTrue(noImageId > 0)
+                val savedNoImage = db.categories.findById(noImageId)
+                assertNotNull(savedNoImage)
+                assertNull(savedNoImage.imagePath)
 
                 // 8. Cycle prevention
                 val cycleCat = Category(id = rootId, name = "Boulangerie Artisanale", parentId = rootId, active = true, imagePath = "images/boulangerie.png")

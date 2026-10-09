@@ -3,6 +3,7 @@ package ma.elaroui.pos.desktop.platform
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
 import ma.elaroui.pos.shared.ApplicationDirectories
 import ma.elaroui.pos.shared.ApplicationDirectoriesProvider
 import ma.elaroui.pos.shared.PlatformPath
@@ -40,6 +41,67 @@ data class DesktopApplicationPaths(
         listOf(data, database.parent, backups, images, logs, configuration, cache, temporary, licenseFile.parent)
             .filterNotNull()
             .forEach(Files::createDirectories)
+        migrateLegacyDataIfPresent()
+    }
+
+    fun migrateLegacyDataIfPresent() {
+        if (Files.exists(database) && Files.size(database) > 0L) {
+            return
+        }
+        val parentDir = root.parent ?: return
+        val legacyNames = when (DesktopPlatform.detect()) {
+            DesktopPlatform.WINDOWS -> listOf("PatisseriePOS")
+            DesktopPlatform.LINUX -> listOf("patisserie-pos")
+            DesktopPlatform.UNSUPPORTED -> emptyList()
+        }
+        for (legacy in legacyNames) {
+            val candidateRoot = parentDir.resolve(legacy)
+            val candidateDb = candidateRoot.resolve("data").resolve("pos.db")
+            if (Files.exists(candidateDb) && Files.size(candidateDb) > 0L) {
+                runCatching {
+                    Files.createDirectories(database.parent)
+                    Files.copy(candidateDb, database, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    val wal = candidateRoot.resolve("data").resolve("pos.db-wal")
+                    if (Files.exists(wal)) {
+                        Files.copy(wal, database.resolveSibling("pos.db-wal"), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    }
+                    val shm = candidateRoot.resolve("data").resolve("pos.db-shm")
+                    if (Files.exists(shm)) {
+                        Files.copy(shm, database.resolveSibling("pos.db-shm"), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    }
+                    val candidateLicense = candidateRoot.resolve("data").resolve("secure").resolve("license.dat")
+                    if (Files.exists(candidateLicense) && (!Files.exists(licenseFile) || Files.size(licenseFile) == 0L)) {
+                        Files.createDirectories(licenseFile.parent)
+                        Files.copy(candidateLicense, licenseFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    }
+                    val candidateImages = candidateRoot.resolve("data").resolve("images")
+                    if (Files.exists(candidateImages) && Files.isDirectory(candidateImages)) {
+                        copyDirectoryRecursively(candidateImages, images)
+                    }
+                    val candidateBackups = candidateRoot.resolve("data").resolve("backups")
+                    if (Files.exists(candidateBackups) && Files.isDirectory(candidateBackups)) {
+                        copyDirectoryRecursively(candidateBackups, backups)
+                    }
+                }
+                break
+            }
+        }
+    }
+
+    private fun copyDirectoryRecursively(source: Path, target: Path) {
+        if (!Files.exists(source)) return
+        Files.walk(source).use { stream ->
+            stream.forEach { sourcePath ->
+                val relative = source.relativize(sourcePath)
+                val targetPath = target.resolve(relative)
+                if (Files.isDirectory(sourcePath)) {
+                    Files.createDirectories(targetPath)
+                } else {
+                    Files.createDirectories(targetPath.parent)
+                    Files.copy(sourcePath, targetPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+        }
     }
 
     fun asSharedDirectories() = ApplicationDirectories(

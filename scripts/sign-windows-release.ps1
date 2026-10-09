@@ -7,8 +7,8 @@ param(
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $artifacts = @(
-    (Join-Path $projectRoot "desktopApp\build\compose\binaries\main\exe\CafeRestaurantPOS-1.0.0.exe"),
-    (Join-Path $projectRoot "desktopApp\build\compose\binaries\main\msi\CafeRestaurantPOS-1.0.0.msi")
+    (Join-Path $projectRoot "desktopApp\build\compose\binaries\main\exe\PATISSERIE_POS-1.2.5.exe"),
+    (Join-Path $projectRoot "desktopApp\build\compose\binaries\main\msi\PATISSERIE_POS-1.2.5.msi")
 )
 
 if (-not (Test-Path -LiteralPath $CertificatePath -PathType Leaf)) {

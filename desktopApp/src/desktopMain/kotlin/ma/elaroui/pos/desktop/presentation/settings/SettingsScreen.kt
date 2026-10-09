@@ -42,6 +42,7 @@ fun SettingsScreen(
     onImportLogo: () -> String?,
     onRemoveLogo: () -> Unit,
     onNavigateToPrinterSettings: () -> Unit = {},
+    onNavigateToCustomerDisplay: () -> Unit = {},
     onNavigateToBackupRestore: () -> Unit = {},
     onNavigateToDataManagement: () -> Unit = {},
     onNavigateToLicenseManagement: () -> Unit = {},
@@ -90,6 +91,7 @@ fun SettingsScreen(
             strings = strings,
             onNavigateToEstablishment = {},
             onNavigateToPrinters = onNavigateToPrinterSettings,
+            onNavigateToCustomerDisplay = onNavigateToCustomerDisplay,
             onNavigateToBackupRestore = onNavigateToBackupRestore,
             onNavigateToDataManagement = onNavigateToDataManagement,
             onNavigateToLicense = onNavigateToLicenseManagement

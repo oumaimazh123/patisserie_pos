@@ -407,10 +407,10 @@ fun CategoryManagementScreen(
                         }
                     }
 
-                    // Mandatory Category Image Picker
+                    // Category Image Picker (Optional)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
-                            strings.text("Image de la catégorie *", "Category Image *", "صورة الفئة *"),
+                            strings.text("Image de la catégorie", "Category Image", "صورة الفئة"),
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp,
                             color = PosColors.TextHigh
@@ -423,14 +423,14 @@ fun CategoryManagementScreen(
                             SafeProductImage(
                                 imagePath = categoryImageInput,
                                 contentDescription = categoryNameInput,
-                                placeholderText = strings.text("Image obligatoire", "Image required", "صورة مطلوبة"),
+                                placeholderText = strings.text("Aucune image", "No image", "لا توجد صورة"),
                                 modifier = Modifier
                                     .size(76.dp)
                                     .clip(RoundedCornerShape(10.dp))
                                     .border(
                                         BorderStroke(
                                             1.5.dp,
-                                            if (categoryImageInput.isNullOrBlank()) PosColors.Danger.copy(alpha = 0.7f) else PosColors.Border
+                                            PosColors.Border
                                         ),
                                         RoundedCornerShape(10.dp)
                                     )
@@ -448,7 +448,7 @@ fun CategoryManagementScreen(
                                 ) {
                                     Text(
                                         if (!categoryImageInput.isNullOrBlank()) strings.text("Changer l'image", "Change image", "تغيير الصورة")
-                                        else strings.text("Ajouter l'image *", "Add image *", "إضافة صورة *"),
+                                        else strings.text("Ajouter une image", "Add image", "إضافة صورة"),
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.SemiBold
                                     )
@@ -660,7 +660,7 @@ fun CategoryManagementScreen(
                             active = categoryActiveInput,
                             displayOrder = categoryDisplayOrderInput.toIntOrNull() ?: 0,
                             parentId = categoryParentIdInput,
-                            imagePath = categoryImageInput
+                            imagePath = categoryImageInput?.trim()?.ifBlank { null }
                         )
 
                         // Hierarchy validation

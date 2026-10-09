@@ -9,6 +9,8 @@ import com.sun.jna.platform.win32.Guid.CLSID
 import com.sun.jna.platform.win32.Guid.IID
 import com.sun.jna.platform.win32.Ole32
 import com.sun.jna.ptr.PointerByReference
+import androidx.compose.ui.awt.ComposeWindow
+import androidx.compose.ui.window.WindowPlacement
 import java.io.File
 import java.nio.file.Path
 
@@ -55,11 +57,90 @@ object WindowsNativeFileDialog {
      * Opens the native Windows File Explorer Open Dialog for image selection (.png, .jpg, .jpeg, .webp).
      * Returns the selected Path, or null if the user cancelled.
      */
+    fun matchesExtension(fileName: String, filterExtensions: List<String>): Boolean {
+        if (filterExtensions.isEmpty()) return true
+        val exts = filterExtensions.map { it.lowercase().removePrefix("*.") }
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext in exts
+    }
+
+    fun formatDefaultFilterPattern(filterExtensions: List<String>): String {
+        val exts = filterExtensions.map { it.lowercase().removePrefix("*.") }
+        return exts.joinToString(";") { "*.$it" }
+    }
+
+    fun findActiveFrame(): java.awt.Frame? {
+        val frames = java.awt.Window.getWindows().filterIsInstance<java.awt.Frame>()
+        return frames.firstOrNull { it.isFocused } ?: frames.firstOrNull { it.isVisible }
+    }
+
+    /**
+     * Reliable native Windows File Explorer dialog using Java AWT (which wraps native Win32/COM
+     * GetOpenFileName / GetSaveFileName / IFileOpenDialog in-process).
+     *
+     * 1. Finds the active Compose POS Window to act as the modal owner (hwndOwner).
+     * 2. This guarantees the file picker appears in the FOREGROUND and never behind the POS window.
+     * 3. If the POS window was in fullscreen, temporarily adjusts placement to Maximized so the dialog
+     *    and taskbar render normally without exclusive fullscreen DWM clipping.
+     * 4. Automatically restores the POS window to Fullscreen mode and regains window focus upon
+     *    file selection or cancellation.
+     * 5. The POS application remains running in the background without losing any state.
+     */
+    fun showNativeWindowsDialog(
+        title: String,
+        isSave: Boolean,
+        filterExtensions: List<String>,
+        defaultFileName: String? = null
+    ): Path? {
+        if (java.awt.GraphicsEnvironment.isHeadless()) {
+            return null
+        }
+
+        val activeFrame = findActiveFrame()
+        val composeWindow = activeFrame as? ComposeWindow
+        val wasFullscreen = composeWindow?.placement == WindowPlacement.Fullscreen
+
+        val mode = if (isSave) java.awt.FileDialog.SAVE else java.awt.FileDialog.LOAD
+        val dialog = java.awt.FileDialog(activeFrame, title, mode).apply {
+            if (filterExtensions.isNotEmpty()) {
+                setFilenameFilter { _, name -> matchesExtension(name, filterExtensions) }
+                file = if (isSave && !defaultFileName.isNullOrBlank()) {
+                    defaultFileName
+                } else {
+                    formatDefaultFilterPattern(filterExtensions)
+                }
+            }
+        }
+
+        try {
+            if (wasFullscreen) {
+                composeWindow?.placement = WindowPlacement.Maximized
+            }
+            dialog.isVisible = true
+            val fileName = dialog.file ?: return null
+            val directory = dialog.directory ?: return null
+            return File(directory, fileName).toPath()
+        } finally {
+            dialog.dispose()
+            if (wasFullscreen) {
+                composeWindow?.placement = WindowPlacement.Fullscreen
+            }
+            activeFrame?.toFront()
+            activeFrame?.requestFocus()
+        }
+    }
+
+    /**
+     * Opens the native Windows File Explorer Open Dialog for image selection (.png, .jpg, .jpeg, .webp).
+     * Returns the selected Path, or null if the user cancelled.
+     */
     fun openImageDialog(title: String = "Choisir une image"): Path? {
-        // AWT FileDialog delegates to the native Windows file picker and is much more
-        // reliable on the Compose UI thread than manually initializing COM there.
         if (System.getProperty("os.name", "").lowercase().contains("win")) {
-            return nativeAwtImageDialog(title)
+            return showNativeWindowsDialog(
+                title = title,
+                isSave = false,
+                filterExtensions = listOf("png", "jpg", "jpeg", "webp")
+            )
         }
         val filters = arrayOf(
             COMDLG_FILTERSPEC("Tous les fichiers image (*.png;*.jpg;*.jpeg;*.webp)", "*.png;*.jpg;*.jpeg;*.webp"),
@@ -75,26 +156,22 @@ object WindowsNativeFileDialog {
         )
     }
 
-    private fun nativeAwtImageDialog(title: String): Path? {
-        val supported = setOf("png", "jpg", "jpeg", "webp")
-        val dialog = java.awt.FileDialog(null as java.awt.Frame?, title, java.awt.FileDialog.LOAD).apply {
-            setFilenameFilter { _, name -> name.substringAfterLast('.', "").lowercase() in supported }
-            file = "*.png;*.jpg;*.jpeg;*.webp"
-            isVisible = true
-        }
-        val fileName = dialog.file ?: return null
-        val directory = dialog.directory ?: return null
-        return File(directory, fileName).toPath()
-    }
-
     /**
-     * Opens the native Windows File Explorer Open Dialog for CSV import (.csv).
+     * Opens the native Windows File Explorer Open/Save Dialog for CSV import/export (.csv).
      */
     fun openCsvDialog(
         title: String = "Importer un fichier CSV",
         isSave: Boolean = false,
         defaultName: String? = null
     ): Path? {
+        if (System.getProperty("os.name", "").lowercase().contains("win")) {
+            return showNativeWindowsDialog(
+                title = title,
+                isSave = isSave,
+                filterExtensions = listOf("csv"),
+                defaultFileName = defaultName
+            )
+        }
         val filters = arrayOf(
             COMDLG_FILTERSPEC("Fichiers CSV (*.csv)", "*.csv"),
             COMDLG_FILTERSPEC("Tous les fichiers (*.*)", "*.*")
@@ -109,9 +186,18 @@ object WindowsNativeFileDialog {
     }
 
     /**
-     * Opens the native Windows File Explorer Open/Save Dialog for database files (.db).
+     * Opens the native Windows File Explorer Open/Save Dialog for database files (.db, .zip).
      */
     fun openBackupDialog(title: String, isSave: Boolean, defaultName: String): Path? {
+        if (System.getProperty("os.name", "").lowercase().contains("win")) {
+            val ext = if (defaultName.endsWith(".db", true)) "db" else "zip"
+            return showNativeWindowsDialog(
+                title = title,
+                isSave = isSave,
+                filterExtensions = listOf(ext, "db", "zip"),
+                defaultFileName = defaultName
+            )
+        }
         val filters = arrayOf(
             COMDLG_FILTERSPEC("Sauvegardes PATISSERIE_POS (*.zip)", "*.zip"),
             COMDLG_FILTERSPEC("Fichiers de base de données (*.db)", "*.db"),
@@ -130,6 +216,13 @@ object WindowsNativeFileDialog {
         openBackupDialog(title, isSave, defaultName)
 
     fun openLicenseDialog(title: String = "Sélectionner une licence"): Path? {
+        if (System.getProperty("os.name", "").lowercase().contains("win")) {
+            return showNativeWindowsDialog(
+                title = title,
+                isSave = false,
+                filterExtensions = listOf("licence", "license", "txt")
+            )
+        }
         val filters = arrayOf(
             COMDLG_FILTERSPEC("Fichiers de licence (*.licence;*.license;*.txt)", "*.licence;*.license;*.txt"),
             COMDLG_FILTERSPEC("Tous les fichiers (*.*)", "*.*")

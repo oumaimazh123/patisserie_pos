@@ -806,21 +806,11 @@ class DesktopNavState(
                 .execute(open.id, closingWithUser)
             if (result is UseCaseResult.Success) {
                 val closedSession = result.value
-                val isAutoEnabled = SessionClosingReportRules.isAutoPrintEnabled(
+                val shouldPrint = SessionClosingReportRules.isAutoPrintEnabled(
                     db.settings.get(SESSION_CLOSING_REPORT_SETTING)
-                )
-                val printResult = if (isAutoEnabled) {
-                    val printer = getEffectiveCustomerPrinter()
-                    if (printer.isBlank() && printerServiceOverride == null) {
-                        PrintResult(
-                            false,
-                            strings.text("Aucune imprimante connectée", "No connected printer", "لا توجد طابعة متصلة"),
-                            strings.text("Aucune imprimante thermique détectée sous Windows", "No thermal printer detected in Windows", "لم يتم العثور على طابعة حرارية في ويندوز"),
-                            PrintErrorCategory.OFFLINE
-                        )
-                    } else {
-                        printSessionClosingReport(closedSession.id, type = SessionReportType.SUMMARY, isReprint = false, automatic = true)
-                    }
+                ) && (getEffectiveCustomerPrinter().isNotBlank() || printerServiceOverride != null)
+                val printResult = if (shouldPrint) {
+                    printSessionClosingReport(closedSession.id, type = SessionReportType.SUMMARY, isReprint = false, automatic = true)
                 } else null
                 lock()
                 if (printResult != null && !printResult.success) {

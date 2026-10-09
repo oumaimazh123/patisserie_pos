@@ -91,7 +91,32 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
             path.parent?.let(Files::createDirectories)
             Class.forName("org.sqlite.JDBC")
             applyPendingRestore(path)
+            createPreUpdateSafetyBackup(path)
             return WindowsPosDatabase(DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}"), path)
+        }
+
+        private fun createPreUpdateSafetyBackup(live: Path) {
+            runCatching {
+                if (Files.exists(live) && Files.size(live) > 0L) {
+                    val backupsDir = live.parent.resolve("backups")
+                    Files.createDirectories(backupsDir)
+                    val dateTag = java.time.LocalDateTime.now()
+                        .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+                    val backupFile = backupsDir.resolve("auto_pre_update_$dateTag.db")
+                    Files.copy(live, backupFile, StandardCopyOption.REPLACE_EXISTING)
+
+                    // Retain only latest 10 auto_pre_update backups to avoid disk growth
+                    Files.list(backupsDir).use { stream ->
+                        val autoBackups = stream
+                            .filter { it.fileName.toString().startsWith("auto_pre_update_") }
+                            .sorted { p1, p2 -> Files.getLastModifiedTime(p2).compareTo(Files.getLastModifiedTime(p1)) }
+                            .toList()
+                        if (autoBackups.size > 10) {
+                            autoBackups.drop(10).forEach { runCatching { Files.deleteIfExists(it) } }
+                        }
+                    }
+                }
+            }
         }
         fun openInMemory(): WindowsPosDatabase {
             Class.forName("org.sqlite.JDBC")

@@ -331,7 +331,8 @@ class ProductionReadinessDeepWorkflowTest {
             )
             val detailedText = String(detailedResult.bytes, FrenchEscPosEncoder.CHARSET)
             assertTrue(detailedText.contains("RAPPORT DE CLOTURE - DETAIL"))
-            assertTrue(detailedText.contains("DUPLICATA"), "Reprint from history must show DUPLICATA")
+            assertFalse(detailedText.contains("DUPLICATA"), "Reprint from history must not show DUPLICATA")
+            assertFalse(detailedText.contains("REIMPRESSION"), "Reprint from history must not show REIMPRESSION")
         } finally {
             db.close()
         }

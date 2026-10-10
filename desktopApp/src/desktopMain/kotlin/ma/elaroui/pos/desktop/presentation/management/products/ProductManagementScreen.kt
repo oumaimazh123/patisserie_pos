@@ -68,7 +68,7 @@ fun ProductManagementScreen(
     products: List<Product>,
     categories: List<Category>,
     strings: DesktopStrings,
-    onSaveProduct: (product: Product) -> String?,
+    onSaveProduct: suspend (product: Product) -> String?,
     onToggleProductActive: (Product) -> Unit,
     onSoftDeleteProduct: (Product) -> Unit = {},
     onImportImage: () -> Result<String?>,
@@ -81,6 +81,8 @@ fun ProductManagementScreen(
     var editingProduct by remember { mutableStateOf<Product?>(null) }
     var productToDelete by remember { mutableStateOf<Product?>(null) }
     var showProductDialog by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var isSavingProduct by remember { mutableStateOf(false) }
     var showImportHelp by remember { mutableStateOf(false) }
 
     // Dialog state fields
@@ -761,13 +763,17 @@ fun ProductManagementScreen(
                             sku = skuInput.trim().ifBlank { null },
                             barcode = barcodeInput.trim().ifBlank { null }
                         )
-                        val saveError = onSaveProduct(p)
-                        if (saveError == null) {
-                            showProductDialog = false
-                        } else {
-                            productNameError = saveError
+                        if (isSavingProduct) return@Button
+                        isSavingProduct = true
+                        scope.launch {
+                            try {
+                                val saveError = onSaveProduct(p)
+                                if (saveError == null) showProductDialog = false
+                                else productNameError = saveError
+                            } finally { isSavingProduct = false }
                         }
                     },
+                    enabled = !isSavingProduct,
                     colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)

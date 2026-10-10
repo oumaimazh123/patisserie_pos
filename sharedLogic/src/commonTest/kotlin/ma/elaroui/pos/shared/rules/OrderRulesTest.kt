@@ -10,6 +10,23 @@ import kotlin.test.assertTrue
 
 class OrderRulesTest {
     @Test
+    fun lineAmountsAndVatReconcileAfterMixedDiscountsAndRounding() {
+        val totals = OrderCalculationRules.calculate(
+            listOf(
+                OrderLine(1, "Taxed", 10_001, 1, 2_000),
+                OrderLine(2, "Reduced VAT", 10_003, 1, 1_000),
+                OrderLine(3, "Exempt", 10_007, 1, 0)
+            ),
+            discountBasisPoints = 333,
+            itemDiscountsBasisPoints = mapOf(1L to 1_111, 2L to 2_222)
+        )
+        assertEquals(totals.totalCentimes, totals.lineAmounts.sumOf { it.amountCentimes })
+        assertEquals(totals.taxCentimes, totals.lineAmounts.sumOf { it.taxCentimes })
+        assertEquals(0L, totals.lineAmounts[2].taxCentimes)
+        assertTrue(totals.lineAmounts[0].taxCentimes > totals.lineAmounts[1].taxCentimes)
+    }
+
+    @Test
     fun itemDiscountOnlyReducesTaxOfTheDiscountedProduct() {
         val lines = listOf(
             OrderLine(1, "Taxed cake", 1200, 1, 2000),

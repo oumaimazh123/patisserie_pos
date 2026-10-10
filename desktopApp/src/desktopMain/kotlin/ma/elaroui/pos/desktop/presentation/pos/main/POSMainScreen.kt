@@ -98,6 +98,7 @@ fun POSMainScreen(
     onItemDiscountChanged: (productId: Long, basisPoints: Int) -> Unit = { _, _ -> },
     onHoldOrder: () -> Unit,
     onProceedToPayment: () -> Unit,
+    isSavingOrder: Boolean = false,
     onClearCart: (() -> Unit)? = null,
     onBarcodeScanned: (barcode: String) -> Unit = {},
     message: String = "",
@@ -710,7 +711,7 @@ fun POSMainScreen(
                 ) {
                     OutlinedButton(
                         onClick = onHoldOrder,
-                        enabled = cartItems.isNotEmpty(),
+                        enabled = cartItems.isNotEmpty() && !isSavingOrder,
                         modifier = Modifier
                             .weight(1f)
                             .height(PosDimens.TouchStandard)
@@ -737,7 +738,7 @@ fun POSMainScreen(
                             .weight(1.5f)
                             .height(PosDimens.CashOutButtonHeight)
                             .pointerHoverIcon(PointerIcon.Hand),
-                        enabled = cartItems.isNotEmpty(),
+                        enabled = cartItems.isNotEmpty() && !isSavingOrder,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = PosColors.Primary,
                             disabledContainerColor = PosColors.Primary.copy(alpha = 0.38f)

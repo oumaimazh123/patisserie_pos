@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,15 +47,17 @@ import ma.elaroui.pos.desktop.presentation.model.UiMessage
 fun CashierManagementScreen(
     users: List<User>,
     strings: DesktopStrings,
-    onCreateCashier: (name: String, pin: String) -> String?,
-    onUpdateCashier: (id: Long, name: String?, pin: String?, active: Boolean?) -> String?,
+    onCreateCashier: suspend (name: String, pin: String) -> String?,
+    onUpdateCashier: suspend (id: Long, name: String?, pin: String?, active: Boolean?) -> String?,
     onSoftDeleteCashier: (User) -> Unit = {},
-    onUpdateOwnerPin: ((newPin: String) -> String?)? = null,
+    onUpdateOwnerPin: (suspend (newPin: String) -> String?)? = null,
     onBack: (() -> Unit)? = null,
     message: String = "",
     uiMessage: UiMessage? = null,
     onClearMessage: () -> Unit = {}
 ) {
+    val actionScope = rememberCoroutineScope()
+    var isSaving by remember { mutableStateOf(false) }
     var showCashierDialog by remember { mutableStateOf(false) }
     var showOwnerPinDialog by remember { mutableStateOf(false) }
     var editingCashier by remember { mutableStateOf<User?>(null) }
@@ -272,9 +275,14 @@ fun CashierManagementScreen(
                                     strings = strings,
                                     onEdit = { openEdit(cashier) },
                                     onToggleStatus = {
-                                        val err = onUpdateCashier(cashier.id, null, null, !cashier.active)
-                                        if (err != null) {
-                                            feedbackMessage = err
+                                        if (!isSaving) {
+                                            isSaving = true
+                                            actionScope.launch {
+                                                try {
+                                                    val err = onUpdateCashier(cashier.id, null, null, !cashier.active)
+                                                    if (err != null) feedbackMessage = err
+                                                } finally { isSaving = false }
+                                            }
                                         }
                                     },
                                     onDelete = { cashierToDelete = cashier }
@@ -398,25 +406,32 @@ fun CashierManagementScreen(
                                 }
                                 return@Button
                             }
-                            val saveError = if (isEditing) {
-                                onUpdateCashier(editingCashier!!.id, nameInput.trim(), pinInput, activeInput)
-                            } else {
-                                onCreateCashier(nameInput.trim(), pinInput)
-                            }
-                            if (saveError == null) {
-                                showCashierDialog = false
-                            } else {
-                                cashierNameError = saveError
+                            if (!isSaving) {
+                                isSaving = true
+                                actionScope.launch {
+                                    try {
+                                        val saveError = if (isEditing) {
+                                            onUpdateCashier(editingCashier!!.id, nameInput.trim(), pinInput, activeInput)
+                                        } else onCreateCashier(nameInput.trim(), pinInput)
+                                        if (saveError == null) showCashierDialog = false
+                                        else cashierNameError = saveError
+                                    } finally { isSaving = false }
+                                }
                             }
                         } else {
-                            val saveError = onUpdateCashier(editingCashier!!.id, nameInput.trim(), null, activeInput)
-                            if (saveError == null) {
-                                showCashierDialog = false
-                            } else {
-                                cashierNameError = saveError
+                            if (!isSaving) {
+                                isSaving = true
+                                actionScope.launch {
+                                    try {
+                                        val saveError = onUpdateCashier(editingCashier!!.id, nameInput.trim(), null, activeInput)
+                                        if (saveError == null) showCashierDialog = false
+                                        else cashierNameError = saveError
+                                    } finally { isSaving = false }
+                                }
                             }
                         }
                     },
+                    enabled = !isSaving,
                     colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
@@ -507,14 +522,20 @@ fun CashierManagementScreen(
                             }
                             return@Button
                         }
-                        val saveError = onUpdateOwnerPin(ownerPinInput)
-                        if (saveError == null) {
-                            showOwnerPinDialog = false
-                            feedbackMessage = strings.text("Code PIN administrateur modifié avec succès.", "Admin PIN changed successfully.", "تم تغيير رمز PIN للمشرف بنجاح.")
-                        } else {
-                            ownerPinError = saveError
+                        if (!isSaving) {
+                            isSaving = true
+                            actionScope.launch {
+                                try {
+                                    val saveError = onUpdateOwnerPin(ownerPinInput)
+                                    if (saveError == null) {
+                                        showOwnerPinDialog = false
+                                        feedbackMessage = strings.text("Code PIN administrateur modifié avec succès.", "Admin PIN changed successfully.", "تم تغيير رمز PIN للمشرف بنجاح.")
+                                    } else ownerPinError = saveError
+                                } finally { isSaving = false }
+                            }
                         }
                     },
+                    enabled = !isSaving,
                     colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)

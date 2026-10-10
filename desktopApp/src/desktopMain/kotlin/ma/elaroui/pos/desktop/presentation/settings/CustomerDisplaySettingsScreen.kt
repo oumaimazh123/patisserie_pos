@@ -39,7 +39,7 @@ import ma.elaroui.pos.shared.display.VfdStopBits
 fun CustomerDisplaySettingsScreen(
     controller: CustomerDisplayController,
     strings: DesktopStrings,
-    onSaveSettings: (CustomerDisplayConfig) -> Unit,
+    onSaveSettings: suspend (CustomerDisplayConfig) -> Unit,
     onNavigateToEstablishment: () -> Unit,
     onNavigateToPrinters: () -> Unit,
     onNavigateToBackupRestore: () -> Unit,

@@ -18,6 +18,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import ma.elaroui.pos.desktop.DesktopStrings
 import ma.elaroui.pos.desktop.presentation.components.PosColors
 import ma.elaroui.pos.desktop.presentation.components.PosInlineAlert
@@ -39,7 +40,7 @@ fun CloseRegisterScreen(
     activeOrdersCount: Int,
     cashierName: String = "",
     strings: DesktopStrings,
-    onCloseRegisterSubmitted: (input: RegisterClosingInput) -> Unit,
+    onCloseRegisterSubmitted: suspend (input: RegisterClosingInput) -> Unit,
     onNavigateToActiveOrders: (() -> Unit)? = null,
     onBack: () -> Unit,
     errorMessage: String = "",
@@ -48,6 +49,7 @@ fun CloseRegisterScreen(
 ) {
     var closingNoteInput by remember { mutableStateOf("") }
     var isSubmitting by remember { mutableStateOf(false) }
+    val submitScope = rememberCoroutineScope()
     var showConfirmDialog by remember { mutableStateOf(false) }
 
     val totalSalesCentimes = cashSalesCentimes + cardSalesCentimes
@@ -438,7 +440,10 @@ fun CloseRegisterScreen(
                             val input = RegisterClosingInput(
                                 closingNote = closingNoteInput.trim().takeIf { it.isNotBlank() }
                             )
-                            onCloseRegisterSubmitted(input)
+                            submitScope.launch {
+                                try { onCloseRegisterSubmitted(input) }
+                                finally { isSubmitting = false }
+                            }
                         }
                     },
                     enabled = !isSubmitting,

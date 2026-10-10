@@ -43,6 +43,7 @@ fun LicenseManagementScreen(
     canNavigateBack: Boolean = true,
     onNavigateToEstablishment: () -> Unit = {},
     onNavigateToPrinters: () -> Unit = {},
+    onNavigateToCustomerDisplay: () -> Unit = {},
     onNavigateToBackupRestore: () -> Unit = {},
     onNavigateToDataManagement: () -> Unit = {},
     onBack: (() -> Unit)? = null
@@ -69,6 +70,7 @@ fun LicenseManagementScreen(
             strings = strings,
             onNavigateToEstablishment = onNavigateToEstablishment,
             onNavigateToPrinters = onNavigateToPrinters,
+            onNavigateToCustomerDisplay = onNavigateToCustomerDisplay,
             onNavigateToBackupRestore = onNavigateToBackupRestore,
             onNavigateToDataManagement = onNavigateToDataManagement,
             onNavigateToLicense = {}

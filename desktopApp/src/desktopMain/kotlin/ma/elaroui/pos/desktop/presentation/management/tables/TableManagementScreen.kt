@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,11 +49,11 @@ fun TableManagementScreen(
     areas: List<DiningArea>,
     tables: List<RestaurantTable>,
     strings: DesktopStrings,
-    onSaveArea: (DiningArea) -> String?,
+    onSaveArea: suspend (DiningArea) -> String?,
     onToggleAreaActive: (DiningArea) -> Unit,
     onSoftDeleteArea: (DiningArea) -> Unit = {},
-    onSaveTable: (areaId: Long, name: String) -> String?,
-    onUpdateTable: (tableId: Long, name: String, areaId: Long) -> String? = { _, _, _ -> null },
+    onSaveTable: suspend (areaId: Long, name: String) -> String?,
+    onUpdateTable: suspend (tableId: Long, name: String, areaId: Long) -> String? = { _, _, _ -> null },
     onTableStatusChanged: (tableId: Long, newStatus: TableStatus) -> Unit,
     onToggleTableActive: (RestaurantTable) -> Unit,
     onSoftDeleteTable: (RestaurantTable) -> Unit = {},
@@ -62,6 +63,8 @@ fun TableManagementScreen(
     uiMessage: UiMessage? = null,
     onClearMessage: () -> Unit = {}
 ) {
+    val actionScope = rememberCoroutineScope()
+    var isSaving by remember { mutableStateOf(false) }
     var selectedAreaId by remember { mutableStateOf<Long?>(areas.firstOrNull()?.id) }
     var showAreaDialog by remember { mutableStateOf(false) }
     var editingArea by remember { mutableStateOf<DiningArea?>(null) }
@@ -429,14 +432,19 @@ fun TableManagementScreen(
                                 active = areaActiveInput,
                                 imagePath = areaImagePathInput
                             )
-                            val saveError = onSaveArea(areaToSave)
-                            if (saveError == null) {
-                                showAreaDialog = false
-                            } else {
-                                areaNameError = saveError
+                            if (!isSaving) {
+                                isSaving = true
+                                actionScope.launch {
+                                    try {
+                                        val saveError = onSaveArea(areaToSave)
+                                        if (saveError == null) showAreaDialog = false
+                                        else areaNameError = saveError
+                                    } finally { isSaving = false }
+                                }
                             }
                         }
                     },
+                    enabled = !isSaving,
                     colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
@@ -542,17 +550,22 @@ fun TableManagementScreen(
                         }
                         if (hasError) return@Button
 
-                        val saveError = if (isEditing) {
-                            onUpdateTable(editingTable!!.id, tableNameInput.trim(), selectedTableAreaId)
-                        } else {
-                            onSaveTable(selectedTableAreaId, tableNameInput.trim())
-                        }
-                        if (saveError == null) {
-                            showTableDialog = false
-                        } else {
-                            tableNameError = saveError
+                        if (!isSaving) {
+                            isSaving = true
+                            actionScope.launch {
+                                try {
+                                    val saveError = if (isEditing) {
+                                        onUpdateTable(editingTable!!.id, tableNameInput.trim(), selectedTableAreaId)
+                                    } else {
+                                        onSaveTable(selectedTableAreaId, tableNameInput.trim())
+                                    }
+                                    if (saveError == null) showTableDialog = false
+                                    else tableNameError = saveError
+                                } finally { isSaving = false }
+                            }
                         }
                     },
+                    enabled = !isSaving,
                     colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)

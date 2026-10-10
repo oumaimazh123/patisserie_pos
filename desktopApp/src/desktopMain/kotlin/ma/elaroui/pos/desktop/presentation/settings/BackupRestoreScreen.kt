@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,10 +32,11 @@ import ma.elaroui.pos.desktop.presentation.model.UiMessage
 fun BackupRestoreScreen(
     defaultBackupPath: Path,
     strings: DesktopStrings,
-    onBackupRequested: (targetPath: Path) -> Result<Unit>,
-    onRestoreRequested: (sourcePath: Path) -> Result<Unit>,
+    onBackupRequested: suspend (targetPath: Path) -> Result<Unit>,
+    onRestoreRequested: suspend (sourcePath: Path) -> Result<Unit>,
     onNavigateToEstablishment: () -> Unit = {},
     onNavigateToPrinters: () -> Unit = {},
+    onNavigateToCustomerDisplay: () -> Unit = {},
     onNavigateToDataManagement: () -> Unit = {},
     onNavigateToLicense: () -> Unit = {},
     onBack: (() -> Unit)? = null
@@ -45,6 +47,8 @@ fun BackupRestoreScreen(
     var restorePathError by remember { mutableStateOf<String?>(null) }
     var uiMessage by remember { mutableStateOf<UiMessage?>(null) }
     var showRestoreConfirmation by remember { mutableStateOf(false) }
+    var isWorking by remember { mutableStateOf(false) }
+    val operationScope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -59,6 +63,7 @@ fun BackupRestoreScreen(
             strings = strings,
             onNavigateToEstablishment = onNavigateToEstablishment,
             onNavigateToPrinters = onNavigateToPrinters,
+            onNavigateToCustomerDisplay = onNavigateToCustomerDisplay,
             onNavigateToBackupRestore = {},
             onNavigateToDataManagement = onNavigateToDataManagement,
             onNavigateToLicense = onNavigateToLicense
@@ -187,17 +192,25 @@ fun BackupRestoreScreen(
                                     if (path == null) {
                                         exportPathError = strings.text("Chemin de destination invalide", "Invalid target path", "مسار غير صالح")
                                     } else {
-                                        val result = onBackupRequested(path)
-                                        if (result.isSuccess) {
-                                            exportPathError = null
-                                            uiMessage = UiMessage.success(
-                                                strings.text("Sauvegarde exportée avec succès : ", "Backup exported successfully to: ", "تم تصدير النسخة الاحتياطية بنجاح: ") + path.fileName
-                                            )
-                                        } else {
-                                            exportPathError = strings.text("Échec de la sauvegarde", "Backup failed", "فشل التصدير") + ": ${result.exceptionOrNull()?.message}"
+                                        if (!isWorking) {
+                                            isWorking = true
+                                            operationScope.launch {
+                                                try {
+                                                    val result = onBackupRequested(path)
+                                                    if (result.isSuccess) {
+                                                        exportPathError = null
+                                                        uiMessage = UiMessage.success(
+                                                            strings.text("Sauvegarde exportée avec succès : ", "Backup exported successfully to: ", "تم تصدير النسخة الاحتياطية بنجاح: ") + path.fileName
+                                                        )
+                                                    } else {
+                                                        exportPathError = strings.text("Échec de la sauvegarde", "Backup failed", "فشل التصدير") + ": ${result.exceptionOrNull()?.message}"
+                                                    }
+                                                } finally { isWorking = false }
+                                            }
                                         }
                                     }
                                 },
+                                enabled = !isWorking,
                                 colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                                 shape = RoundedCornerShape(10.dp),
                                 elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
@@ -327,19 +340,26 @@ fun BackupRestoreScreen(
             onConfirm = {
                 showRestoreConfirmation = false
                 val sourcePath = Path.of(restorePathInput)
-                val result = onRestoreRequested(sourcePath)
-                if (result.isSuccess) {
-                    uiMessage = UiMessage.success(
-                        strings.text(
-                            "Restauration programmée avec succès. Elle sera appliquée au prochain redémarrage de l'application.",
-                            "Restore staged successfully. It will be applied when the app restarts.",
-                            "تمت جدولة الاستعادة بنجاح وسيتم تطبيقها عند إعادة تشغيل التطبيق."
-                        )
-                    )
-                } else {
-                    uiMessage = UiMessage.error(
-                        strings.text("Échec de la restauration", "Restore failed", "فشل الاسترجاع") + ": ${result.exceptionOrNull()?.message}"
-                    )
+                if (!isWorking) {
+                    isWorking = true
+                    operationScope.launch {
+                        try {
+                            val result = onRestoreRequested(sourcePath)
+                            if (result.isSuccess) {
+                                uiMessage = UiMessage.success(
+                                    strings.text(
+                                        "Restauration programmée avec succès. Elle sera appliquée au prochain redémarrage de l'application.",
+                                        "Restore staged successfully. It will be applied when the app restarts.",
+                                        "تمت جدولة الاستعادة بنجاح وسيتم تطبيقها عند إعادة تشغيل التطبيق."
+                                    )
+                                )
+                            } else {
+                                uiMessage = UiMessage.error(
+                                    strings.text("Échec de la restauration", "Restore failed", "فشل الاسترجاع") + ": ${result.exceptionOrNull()?.message}"
+                                )
+                            }
+                        } finally { isWorking = false }
+                    }
                 }
             },
             onDismiss = { showRestoreConfirmation = false }

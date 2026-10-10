@@ -36,7 +36,7 @@ class WindowsPosDatabaseTest {
             assertTrue(db.allUsers().isEmpty())
             assertTrue(db.categories.observeAll().first().isEmpty())
             assertNull(db.settings.get("establishment_name"))
-            assertEquals(11, db.schemaVersion())
+            assertEquals(12, db.schemaVersion())
         }
     }
 
@@ -528,7 +528,7 @@ class WindowsPosDatabaseTest {
                 s.execute("INSERT INTO products_v10 SELECT id,category_id,name,price_centimes,tax_basis_points,image_path,available,active,display_order,sku,barcode,name_arabic,unit,description,deleted_at FROM products")
                 s.execute("DROP TABLE products")
                 s.execute("ALTER TABLE products_v10 RENAME TO products")
-                s.execute("DELETE FROM schema_migrations WHERE version=11")
+                s.execute("DELETE FROM schema_migrations WHERE version>=11")
             }
         }
         WindowsPosDatabase.open(path).use { db ->
@@ -539,7 +539,7 @@ class WindowsPosDatabaseTest {
             assertEquals(6_00L, prod.priceCentimes)
             assertEquals("CRO-01", prod.sku)
             assertEquals("111222", prod.barcode)
-            assertEquals(11, db.schemaVersion())
+            assertEquals(12, db.schemaVersion())
             db.products.save(prod.copy(categoryId = null))
             assertNull(db.products.findById(savedProdId)?.categoryId)
             assertFails { db.products.save(prod.copy(id = 0, name = "Duplicate barcode")) }

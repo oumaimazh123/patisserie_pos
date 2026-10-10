@@ -22,6 +22,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -40,9 +42,16 @@ import ma.elaroui.pos.desktop.presentation.components.touchHorizontalDragScroll
 import ma.elaroui.pos.shared.domain.Category
 import ma.elaroui.pos.shared.domain.OrderType
 import ma.elaroui.pos.shared.domain.User
+
 import ma.elaroui.pos.shared.rules.CategoryHierarchyRules
 import ma.elaroui.pos.shared.rules.CategoryTreeNode
 import ma.elaroui.pos.shared.rules.MoneyRules
+
+private data class LoadedReport(
+    val summary: SalesSummary,
+    val analytics: RetailSalesAnalytics,
+    val evolution: List<SalesEvolutionPoint>
+)
 
 private data class FlatCategoryDisplay(val category: Category, val depth: Int)
 
@@ -142,15 +151,28 @@ fun DailySalesReportScreen(
     val fromEpoch = startDate.atStartOfDay(zone).toInstant().toEpochMilli()
     val toEpoch = endDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1
 
-    val summary = remember(fromEpoch, toEpoch, selectedCashierId, selectedOrderType, matchingCategoryIds) {
-        summaryForRange(fromEpoch, toEpoch, selectedCashierId, selectedOrderType, matchingCategoryIds)
+    val loadedReport by produceState<LoadedReport?>(null, fromEpoch, toEpoch, isHourly,
+        selectedCashierId, selectedOrderType, matchingCategoryIds) {
+        value = null
+        value = withContext(Dispatchers.IO) {
+            LoadedReport(
+                summaryForRange(fromEpoch, toEpoch, selectedCashierId, selectedOrderType, matchingCategoryIds),
+                analyticsForRange(fromEpoch, toEpoch, selectedCashierId, selectedOrderType, matchingCategoryIds),
+                evolutionForRange(fromEpoch, toEpoch, isHourly, selectedCashierId, selectedOrderType, matchingCategoryIds)
+            )
+        }
     }
-    val analytics = remember(fromEpoch, toEpoch, selectedCashierId, selectedOrderType, matchingCategoryIds) {
-        analyticsForRange(fromEpoch, toEpoch, selectedCashierId, selectedOrderType, matchingCategoryIds)
+    if (loadedReport == null) {
+        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+            ManagementPageHeader(strings.reportsTitle, strings, onBack)
+            Spacer(Modifier.height(32.dp))
+            CircularProgressIndicator()
+        }
+        return
     }
-    val evolutionPoints = remember(fromEpoch, toEpoch, isHourly, selectedCashierId, selectedOrderType, matchingCategoryIds) {
-        evolutionForRange(fromEpoch, toEpoch, isHourly, selectedCashierId, selectedOrderType, matchingCategoryIds)
-    }
+    val summary = loadedReport!!.summary
+    val analytics = loadedReport!!.analytics
+    val evolutionPoints = loadedReport!!.evolution
 
     val dateFormatter = remember { DateTimeFormatter.ofPattern("dd/MM/yyyy") }
 

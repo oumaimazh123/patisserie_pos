@@ -8,8 +8,11 @@ data class OrderTotals(
     val subtotalCentimes: Long,
     val discountCentimes: Long,
     val taxCentimes: Long,
-    val totalCentimes: Long
+    val totalCentimes: Long,
+    val lineAmounts: List<RecognizedLineAmounts> = emptyList()
 )
+
+data class RecognizedLineAmounts(val amountCentimes: Long, val taxCentimes: Long)
 
 object OrderCalculationRules {
     /**
@@ -29,7 +32,8 @@ object OrderCalculationRules {
         var itemCount = 0
         var subtotal = 0L
         var totalItemDiscounts = 0L
-        var taxBeforeDiscount = 0L
+        val afterItemDiscount = mutableListOf<Pair<Long, Long>>()
+        val taxRates = mutableListOf<Int>()
         lines.forEach { line ->
             require(line.quantity > 0) { "Quantity must be greater than zero." }
             require(line.unitPriceCentimes >= 0) { "Unit price cannot be negative." }
@@ -44,10 +48,8 @@ object OrderCalculationRules {
                 10_000L
             )
             totalItemDiscounts = MathRules.addExact(totalItemDiscounts, lineDisc)
-
-            val tax = MathRules.multiplyExact(lineTotal - lineDisc, line.taxRateBasisPoints.toLong()) /
-                (10_000L + line.taxRateBasisPoints)
-            taxBeforeDiscount = MathRules.addExact(taxBeforeDiscount, tax)
+            afterItemDiscount += line.productId to (lineTotal - lineDisc)
+            taxRates += line.taxRateBasisPoints
         }
 
         val subtotalAfterItemDiscounts = MathRules.subtractExact(subtotal, totalItemDiscounts)
@@ -57,10 +59,32 @@ object OrderCalculationRules {
         )
         val totalDiscount = MathRules.addExact(totalItemDiscounts, globalDiscount)
         val total = MathRules.subtractExact(subtotal, totalDiscount)
-        val tax = if (subtotalAfterItemDiscounts == 0L) 0L else {
-            MathRules.divideHalfUp(MathRules.multiplyExact(taxBeforeDiscount, total), subtotalAfterItemDiscounts)
+        val globalShares = allocate(globalDiscount, afterItemDiscount.map { it.second })
+        val lineAmounts = afterItemDiscount.mapIndexed { index, (_, amount) ->
+            val net = amount - globalShares[index]
+            val rate = taxRates[index]
+            val tax = MathRules.multiplyExact(net, rate.toLong()) / (10_000L + rate)
+            RecognizedLineAmounts(net, tax)
         }
-        return OrderTotals(itemCount, subtotal, totalDiscount, tax, total)
+        val tax = lineAmounts.fold(0L) { sum, line -> MathRules.addExact(sum, line.taxCentimes) }
+        return OrderTotals(itemCount, subtotal, totalDiscount, tax, total, lineAmounts)
+    }
+
+    /** Largest remainders keep the allocated centimes equal to the order discount. */
+    private fun allocate(amount: Long, weights: List<Long>): List<Long> {
+        val sum = weights.fold(0L, MathRules::addExact)
+        if (sum == 0L) return weights.map { 0L }
+        val base = weights.map { MathRules.multiplyExact(amount, it) / sum }.toMutableList()
+        var remainder = amount - base.sum()
+        val byRemainder = weights.indices.sortedWith(
+            compareByDescending<Int> { MathRules.multiplyExact(amount, weights[it]) % sum }.thenBy { it }
+        )
+        for (index in byRemainder) {
+            if (remainder == 0L) break
+            base[index]++
+            remainder--
+        }
+        return base
     }
 }
 

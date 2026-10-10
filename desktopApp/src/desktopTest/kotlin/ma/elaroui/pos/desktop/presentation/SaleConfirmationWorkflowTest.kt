@@ -12,6 +12,35 @@ import ma.elaroui.pos.shared.domain.*
 
 class SaleConfirmationWorkflowTest {
 
+    @Test
+    fun heldOrderResumeRestoresEachDiscountWithoutChangingVat(): Unit = runBlocking {
+        val (db, state, _) = setupNavEnvironment()
+        try {
+            val owner = db.allUsers().first()
+            state.login(owner, "1234")
+            val category = db.categories.save(Category(0, "Discounted", active = true))
+            val taxed = db.products.save(Product(0, category, "Taxed", 10_000L, 2_000))
+            val exempt = db.products.save(Product(0, category, "Exempt", 10_000L, 0))
+            state.refresh()
+            state.cart[taxed] = 1
+            state.cart[exempt] = 1
+            state.itemDiscountsBasisPoints[taxed] = 5_000
+            state.discountBasisPoints = 500
+            state.holdOrder()
+            val held = state.openOrders.single { it.number.startsWith("SALE-") }
+            state.resumeOrder(held)
+            assertEquals(500, state.discountBasisPoints)
+            assertEquals(5_000, state.itemDiscountsBasisPoints[taxed])
+            assertNull(state.itemDiscountsBasisPoints[exempt])
+            state.createOrder()
+            val resumed = assertNotNull(state.pendingOrder)
+            assertEquals(held.totalCentimes, resumed.totalCentimes)
+            assertEquals(held.taxCentimes, resumed.taxCentimes)
+        } finally {
+            db.close()
+        }
+    }
+
     private class MockPrinterService(
         var shouldFailPrint: Boolean = false,
         var availablePrinters: List<PrinterInfo> = listOf(PrinterInfo("THERMAL_RECEIPT", isDefault = true))
@@ -567,9 +596,9 @@ class SaleConfirmationWorkflowTest {
             val printResult = state.printAndFinishSale(conf)
             assertFalse(printResult.success, "Print result must report failure")
 
-            // But flow still returns to POS_MAIN and keeps sale safely saved
-            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
-            assertNull(state.completedSaleConfirmation)
+            // The saved sale remains available for a retry or an explicit finish.
+            assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
+            assertNotNull(state.completedSaleConfirmation)
             assertTrue(state.message.isNotBlank(), "Error message must be presented to user")
 
             val sales = db.salesHistory()
@@ -578,11 +607,37 @@ class SaleConfirmationWorkflowTest {
 
             // When printer is restored online, re-printing the receipt succeeds
             printer.shouldFailPrint = false
-            val reprintResult = state.printCompletedSaleReceipt(conf)
+            val reprintResult = state.printAndFinishSale(conf)
             assertTrue(reprintResult.success, "Reprint must succeed once printer is back online")
             assertEquals(1, printer.rawPrintCount, "Printer must receive the receipt print job")
+            assertNull(state.completedSaleConfirmation)
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
         } finally {
             db.close()
         }
+    }
+
+    @Test
+    fun failedPrintCanBeFinishedWithoutRetryAndPaymentIsNotRepeated(): Unit = runBlocking {
+        val (db, state, printer) = setupNavEnvironment(shouldFailPrinter = true)
+        try {
+            val owner = db.allUsers().first()
+            state.login(owner, "1234")
+            val category = db.categories.save(Category(0, "Pastry", active = true))
+            val product = db.products.save(Product(0, category, "Cake", 1_000L, 0))
+            state.refresh()
+            state.cart[product] = 1
+            state.createOrder()
+            state.pay(PaymentMethod.CASH, 1_000L)
+            val confirmation = assertNotNull(state.completedSaleConfirmation)
+            assertFalse(state.printAndFinishSale(confirmation).success)
+            assertNotNull(state.completedSaleConfirmation)
+            state.finishSaleWithoutPrinting()
+            assertNull(state.completedSaleConfirmation)
+            assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
+            assertEquals(1, db.salesHistory().size)
+            assertEquals(1_000L, db.payments.totalCashForSession(confirmation.order.registerSessionId))
+            assertEquals(0, printer.rawPrintCount)
+        } finally { db.close() }
     }
 }

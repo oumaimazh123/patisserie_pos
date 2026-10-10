@@ -52,6 +52,7 @@ fun DataManagementScreen(
     onFactoryResetComplete: () -> Unit,
     onNavigateToEstablishment: () -> Unit,
     onNavigateToPrinters: () -> Unit,
+    onNavigateToCustomerDisplay: () -> Unit = {},
     onNavigateToBackupRestore: () -> Unit,
     onNavigateToLicense: () -> Unit,
     onBack: () -> Unit
@@ -108,6 +109,7 @@ fun DataManagementScreen(
             strings = strings,
             onNavigateToEstablishment = onNavigateToEstablishment,
             onNavigateToPrinters = onNavigateToPrinters,
+            onNavigateToCustomerDisplay = onNavigateToCustomerDisplay,
             onNavigateToBackupRestore = onNavigateToBackupRestore,
             onNavigateToDataManagement = {},
             onNavigateToLicense = onNavigateToLicense

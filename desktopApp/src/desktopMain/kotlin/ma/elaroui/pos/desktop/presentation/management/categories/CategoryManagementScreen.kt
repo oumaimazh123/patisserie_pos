@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import ma.elaroui.pos.desktop.DesktopStrings
 import ma.elaroui.pos.desktop.presentation.components.EmptyStateCard
 import ma.elaroui.pos.desktop.presentation.components.ManagementPageHeader
@@ -48,8 +49,8 @@ fun CategoryManagementScreen(
     categories: List<Category>,
     products: List<Product> = emptyList(),
     strings: DesktopStrings,
-    onSaveCategoryWithSubcategory: ((category: Category, subcategory: Category) -> String?)? = null,
-    onSaveCategory: ((category: Category) -> String?)? = null,
+    onSaveCategoryWithSubcategory: (suspend (category: Category, subcategory: Category) -> String?)? = null,
+    onSaveCategory: (suspend (category: Category) -> String?)? = null,
     onToggleCategoryActive: (Category) -> Unit,
     onSoftDeleteCategory: (Category) -> Unit = {},
     onImportImage: (() -> Result<String?>)? = null,
@@ -58,6 +59,8 @@ fun CategoryManagementScreen(
     message: String = ""
 ) {
     var showCategoryDialog by remember { mutableStateOf(false) }
+    var isSavingCategory by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     var editingCategory by remember { mutableStateOf<Category?>(null) }
     var preselectedParentId by remember { mutableStateOf<Long?>(null) }
     var categoryToDelete by remember { mutableStateOf<Category?>(null) }
@@ -670,17 +673,22 @@ fun CategoryManagementScreen(
                             return@Button
                         }
 
-                        val saveError = onSaveCategory?.invoke(targetCat)
-                            ?: onSaveCategoryWithSubcategory?.invoke(targetCat, targetCat)
-                        if (saveError == null) {
-                            showCategoryDialog = false
-                            targetCat.parentId?.let { pid ->
-                                expandedCategoryIds = expandedCategoryIds + pid
-                            }
-                        } else {
-                            categoryNameError = saveError
+                        if (isSavingCategory) return@Button
+                        isSavingCategory = true
+                        scope.launch {
+                            try {
+                                val saveError = if (onSaveCategory != null) onSaveCategory(targetCat)
+                                    else onSaveCategoryWithSubcategory?.invoke(targetCat, targetCat)
+                                if (saveError == null) {
+                                    showCategoryDialog = false
+                                    targetCat.parentId?.let { pid -> expandedCategoryIds = expandedCategoryIds + pid }
+                                } else {
+                                    categoryNameError = saveError
+                                }
+                            } finally { isSavingCategory = false }
                         }
                     },
+                    enabled = !isSavingCategory,
                     colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)

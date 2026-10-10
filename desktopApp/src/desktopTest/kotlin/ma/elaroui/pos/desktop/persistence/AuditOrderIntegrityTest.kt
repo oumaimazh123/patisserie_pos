@@ -67,7 +67,12 @@ class AuditOrderIntegrityTest {
             val updated = assertIs<UseCaseResult.Success<Order>>(
                 create.execute(1, "AUDIT-2", OrderType.COUNTER, 1, listOf(1L to 2), null, 1)
             ).value
-            assertEquals(original.lines.single().copy(quantity = 2), updated.lines.single())
+            val updatedLine = updated.lines.single()
+            assertEquals(original.lines.single().copy(
+                quantity = 2,
+                recognizedAmountCentimes = 2_000L,
+                recognizedTaxCentimes = 181L
+            ), updatedLine)
             assertEquals(original.totalCentimes * 2, updated.totalCentimes)
         }
     }

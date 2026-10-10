@@ -28,6 +28,15 @@ import ma.elaroui.pos.shared.rules.SessionClosingReport
 import ma.elaroui.pos.shared.rules.SessionClosingReportRules
 
 data class SalesSummary(val completedOrders: Int, val salesCentimes: Long, val cashCentimes: Long, val cardCentimes: Long, val taxCentimes: Long)
+
+/** Historical rows have no line allocations. Put the rounding remainder on the
+ * final line so their allocated amounts still reconcile to the stored order. */
+private fun recognizedLineSql(storedColumn: String, orderColumn: String): String =
+    "COALESCE(oi.$storedColumn, CASE WHEN o.subtotal_centimes=0 THEN 0 " +
+        "WHEN oi.id=(SELECT MAX(last_line.id) FROM order_items last_line WHERE last_line.order_id=o.id) " +
+        "THEN o.$orderColumn-COALESCE((SELECT SUM(other.line_total_centimes*o.$orderColumn/o.subtotal_centimes) " +
+        "FROM order_items other WHERE other.order_id=o.id AND other.id<>oi.id),0) " +
+        "ELSE oi.line_total_centimes*o.$orderColumn/o.subtotal_centimes END)"
 data class SalesBreakdown(val label: String, val quantity: Int, val amountCentimes: Long)
 data class RetailSalesAnalytics(
     val byProduct: List<SalesBreakdown>,
@@ -219,7 +228,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                         "restaurant_tables", "dining_areas", "audit_logs")
                     if (!tables.containsAll(required)) return@use false
                     val version = statement.executeQuery("SELECT MAX(version) FROM schema_migrations").use { it.next(); it.getInt(1) }
-                    if (version !in 1..11) return@use false
+                    if (version !in 1..12) return@use false
                     statement.executeQuery("PRAGMA foreign_key_check").use { !it.next() }
                 }
             }
@@ -897,7 +906,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
     }
     fun moveOrder(orderId:Long,newTableId:Long?)=read{c->transactionBlocking{val oldTable=orderTable(c,orderId);if(newTableId!=null){c.prepareStatement("SELECT status,active FROM restaurant_tables WHERE id=?").use{it.setLong(1,newTableId);it.executeQuery().use{r->check(r.next()&&r.getInt("active")!=0&&r.getString("status")!="OCCUPIED")}}};c.prepareStatement("UPDATE orders SET table_id=?,updated_at=? WHERE id=? AND status='OPEN'").use{it.setObject(1,newTableId);it.setLong(2,System.currentTimeMillis());it.setLong(3,orderId);check(it.executeUpdate()==1)};releaseTableIfUnused(c,oldTable,orderId);newTableId?.let{setTableStatus(c,it,TableStatus.OCCUPIED)}}}
     fun orderHistory(status: OrderStatus? = null): List<Order> = read { c ->
-        val sql = "SELECT id, order_number, type, status, subtotal_centimes, discount_centimes, tax_centimes, total_centimes, table_id, register_session_id, cashier_id, created_at, updated_at, customer_name, customer_phone, pickup_date, preparation_status, custom_note, deposit_centimes FROM orders" +
+        val sql = "SELECT id, order_number, type, status, subtotal_centimes, discount_centimes, discount_basis_points, tax_centimes, total_centimes, table_id, register_session_id, cashier_id, created_at, updated_at, customer_name, customer_phone, pickup_date, preparation_status, custom_note, deposit_centimes FROM orders" +
             (status?.let { " WHERE status='${it.name}'" } ?: "") + " ORDER BY updated_at DESC"
         val rawOrders = c.createStatement().use { s ->
             s.executeQuery(sql).use { r ->
@@ -927,7 +936,8 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                         pickupDateEpochMs = nullLong("pickup_date"),
                         preparationStatus = prepStatus,
                         customNote = getString("custom_note"),
-                        depositCentimes = getLong("deposit_centimes")
+                        depositCentimes = getLong("deposit_centimes"),
+                        discountBasisPoints = nullInt("discount_basis_points")
                     )
                     id to order
                 }
@@ -957,7 +967,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         fromEpoch?.let { conditions += "o.updated_at>=?"; args += it }
         toEpoch?.let { conditions += "o.updated_at<=?"; args += it }
         sessionId?.let { conditions += "o.register_session_id=?"; args += it }
-        val sql = "SELECT o.id, o.order_number, o.type, o.status, o.subtotal_centimes, o.discount_centimes, o.tax_centimes, o.total_centimes, o.table_id, o.register_session_id, o.cashier_id, o.created_at, o.updated_at, o.customer_name, o.customer_phone, o.pickup_date, o.preparation_status, o.custom_note, o.deposit_centimes, u.name AS cashier_name, p.method AS pay_method, p.created_at AS paid_at " +
+        val sql = "SELECT o.id, o.order_number, o.type, o.status, o.subtotal_centimes, o.discount_centimes, o.discount_basis_points, o.tax_centimes, o.total_centimes, o.table_id, o.register_session_id, o.cashier_id, o.created_at, o.updated_at, o.customer_name, o.customer_phone, o.pickup_date, o.preparation_status, o.custom_note, o.deposit_centimes, u.name AS cashier_name, p.method AS pay_method, p.created_at AS paid_at " +
             "FROM orders o JOIN users u ON u.id=o.cashier_id LEFT JOIN payments p ON p.order_id=o.id AND p.status='COMPLETED'" +
             (if (conditions.isEmpty()) "" else " WHERE " + conditions.joinToString(" AND ")) + " ORDER BY o.updated_at DESC"
         val rawRows = c.prepareStatement(sql).use { p ->
@@ -989,7 +999,8 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                         pickupDateEpochMs = nullLong("pickup_date"),
                         preparationStatus = prepStatus,
                         customNote = getString("custom_note"),
-                        depositCentimes = getLong("deposit_centimes")
+                        depositCentimes = getLong("deposit_centimes"),
+                        discountBasisPoints = nullInt("discount_basis_points")
                     )
                     Triple(order, getString("cashier_name"), Pair(getString("pay_method")?.let(PaymentMethod::valueOf), nullLong("paid_at")))
                 }
@@ -1214,6 +1225,33 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         orderType: OrderType? = null,
         matchingCategoryIds: Set<Long>? = null
     ): SalesSummary = read { c ->
+        if (!matchingCategoryIds.isNullOrEmpty()) {
+            val placeholders = matchingCategoryIds.joinToString(",") { "?" }
+            val amount = recognizedLineSql("recognized_amount_centimes", "total_centimes")
+            val tax = recognizedLineSql("recognized_tax_centimes", "tax_centimes")
+            val filters = mutableListOf("o.status='COMPLETED'", "COALESCE(oi.category_id_snapshot,p.category_id) IN ($placeholders)")
+            fromEpoch?.let { filters += "o.updated_at>=?" }
+            toEpoch?.let { filters += "o.updated_at<=?" }
+            cashierId?.let { filters += "o.cashier_id=?" }
+            orderType?.let { filters += "o.type=?" }
+            val sql = "SELECT COUNT(DISTINCT o.id), COALESCE(SUM($amount),0), COALESCE(SUM($tax),0), " +
+                "COALESCE(SUM(CASE WHEN pay.method='CASH' THEN $amount ELSE 0 END),0), " +
+                "COALESCE(SUM(CASE WHEN pay.method='CARD' THEN $amount ELSE 0 END),0) " +
+                "FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN products p ON p.id=oi.product_id " +
+                "LEFT JOIN payments pay ON pay.order_id=o.id AND pay.status='COMPLETED' WHERE ${filters.joinToString(" AND ")}"
+            return@read c.prepareStatement(sql).use { statement ->
+                var index = 1
+                matchingCategoryIds.forEach { statement.setLong(index++, it) }
+                fromEpoch?.let { statement.setLong(index++, it) }
+                toEpoch?.let { statement.setLong(index++, it) }
+                cashierId?.let { statement.setLong(index++, it) }
+                orderType?.let { statement.setString(index++, it.name) }
+                statement.executeQuery().use { rows ->
+                    rows.next()
+                    SalesSummary(rows.getInt(1), rows.getLong(2), rows.getLong(4), rows.getLong(5), rows.getLong(3))
+                }
+            }
+        }
         val range = buildList {
             fromEpoch?.let { add("o.updated_at >= ?") }
             toEpoch?.let { add("o.updated_at <= ?") }
@@ -1320,7 +1358,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         orderType: OrderType? = null,
         matchingCategoryIds: Set<Long>? = null
     ): RetailSalesAnalytics = read { c ->
-        val recognizedAmount = "CASE WHEN o.subtotal_centimes=0 THEN 0 ELSE (oi.line_total_centimes*o.total_centimes/o.subtotal_centimes) END"
+        val recognizedAmount = recognizedLineSql("recognized_amount_centimes", "total_centimes")
 
         val baseFilter = mutableListOf("o.status='COMPLETED'", "o.updated_at BETWEEN ? AND ?")
         val baseParams = mutableListOf<Any>(fromEpoch, toEpoch)
@@ -1361,7 +1399,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
             "SELECT oi.product_name AS label, SUM(oi.quantity) AS quantity, SUM($recognizedAmount) AS amount " +
                 "FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN products p ON p.id=oi.product_id " +
                 "WHERE ${productFilter.joinToString(" AND ")} " +
-                "GROUP BY oi.product_name ORDER BY amount DESC, label LIMIT 20",
+                "GROUP BY oi.product_id, oi.product_name ORDER BY amount DESC, label LIMIT 20",
             productParams
         )
 
@@ -1378,7 +1416,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                 "LEFT JOIN products p ON p.id=oi.product_id " +
                 "LEFT JOIN categories c ON c.id=COALESCE(oi.category_id_snapshot, p.category_id) " +
                 "WHERE ${categoryFilter.joinToString(" AND ")} " +
-                "GROUP BY COALESCE(oi.category_name_snapshot, c.name, 'Uncategorized') ORDER BY amount DESC, label",
+                "GROUP BY COALESCE(oi.category_id_snapshot, p.category_id), COALESCE(oi.category_name_snapshot, c.name, 'Uncategorized') ORDER BY amount DESC, label",
             categoryParams
         )
 
@@ -1391,7 +1429,14 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
             )
             cashierParams.addAll(matchingCategoryIds!!)
         }
-        val byCashier = breakdown(
+        val byCashier = if (hasCatFilter) breakdown(
+            "SELECT u.name AS label, COUNT(DISTINCT o.id) AS quantity, SUM($recognizedAmount) AS amount " +
+                "FROM orders o JOIN users u ON u.id=o.cashier_id JOIN order_items oi ON oi.order_id=o.id " +
+                "LEFT JOIN products p ON p.id=oi.product_id WHERE ${baseFilter.joinToString(" AND ")} " +
+                "AND COALESCE(oi.category_id_snapshot,p.category_id) IN ($catPlaceholders) " +
+                "GROUP BY u.id, u.name ORDER BY amount DESC, u.name",
+            baseParams + matchingCategoryIds!!.toList()
+        ) else breakdown(
             "SELECT u.name AS label, COUNT(o.id) AS quantity, SUM(o.total_centimes) AS amount " +
                 "FROM orders o JOIN users u ON u.id=o.cashier_id " +
                 "WHERE ${cashierFilter.joinToString(" AND ")} " +
@@ -1442,7 +1487,18 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
             params.addAll(matchingCategoryIds)
         }
 
-        val sql = "SELECT o.updated_at, o.total_centimes FROM orders o WHERE ${conditions.joinToString(" AND ")} ORDER BY o.updated_at"
+        val sql = if (matchingCategoryIds.isNullOrEmpty()) {
+            "SELECT o.updated_at, o.total_centimes FROM orders o WHERE ${conditions.joinToString(" AND ")} ORDER BY o.updated_at"
+        } else {
+            val amount = recognizedLineSql("recognized_amount_centimes", "total_centimes")
+            // The category predicate above selected qualifying orders. Filter their
+            // lines as well, so the graph matches the category revenue KPI.
+            val placeholders = matchingCategoryIds.joinToString(",") { "?" }
+            "SELECT o.updated_at, SUM($amount) FROM orders o JOIN order_items oi ON oi.order_id=o.id " +
+                "LEFT JOIN products p ON p.id=oi.product_id WHERE ${conditions.joinToString(" AND ")} " +
+                "AND COALESCE(oi.category_id_snapshot,p.category_id) IN ($placeholders) " +
+                "GROUP BY o.id ORDER BY o.updated_at"
+        }
         val rows = c.prepareStatement(sql).use { stmt ->
             var idx = 1
             for (p in params) {
@@ -1452,6 +1508,9 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                     is Int -> stmt.setInt(idx++, p)
                     else -> stmt.setObject(idx++, p)
                 }
+            }
+            if (!matchingCategoryIds.isNullOrEmpty()) {
+                matchingCategoryIds.forEach { stmt.setLong(idx++, it) }
             }
             stmt.executeQuery().use { rs ->
                 val list = mutableListOf<Pair<Long, Long>>()
@@ -2161,6 +2220,17 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                 it.setLong(1, System.currentTimeMillis()); it.executeUpdate()
             }
         }
+        if (12 !in appliedVersions) transactionBlocking {
+            // Nullable discount inputs distinguish historical orders whose original
+            // per-item rules were never stored. No client order or payment is rewritten.
+            addColumnIfMissing("orders", "discount_basis_points", "INTEGER")
+            addColumnIfMissing("order_items", "item_discount_basis_points", "INTEGER")
+            addColumnIfMissing("order_items", "recognized_amount_centimes", "INTEGER")
+            addColumnIfMissing("order_items", "recognized_tax_centimes", "INTEGER")
+            connection.prepareStatement("INSERT INTO schema_migrations(version,applied_at) VALUES(12,?)").use {
+                it.setLong(1, System.currentTimeMillis()); it.executeUpdate()
+            }
+        }
     }
 
     private fun seedBaseFixturesForTests(): Unit = lock.withLock {
@@ -2441,7 +2511,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         }
     }
     fun openOrdersForSession(sessionId: Long): List<Order> = read { c ->
-        val sql = "SELECT id, order_number, type, status, subtotal_centimes, discount_centimes, tax_centimes, total_centimes, table_id, register_session_id, cashier_id, created_at, updated_at, customer_name, customer_phone, pickup_date, preparation_status, custom_note, deposit_centimes FROM orders WHERE status='OPEN' AND register_session_id=? ORDER BY updated_at DESC"
+        val sql = "SELECT id, order_number, type, status, subtotal_centimes, discount_centimes, discount_basis_points, tax_centimes, total_centimes, table_id, register_session_id, cashier_id, created_at, updated_at, customer_name, customer_phone, pickup_date, preparation_status, custom_note, deposit_centimes FROM orders WHERE status='OPEN' AND register_session_id=? ORDER BY updated_at DESC"
         val rawOrders = c.prepareStatement(sql).use { p ->
             p.setLong(1, sessionId)
             p.executeQuery().use { r ->
@@ -2471,7 +2541,8 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                         pickupDateEpochMs = nullLong("pickup_date"),
                         preparationStatus = prepStatus,
                         customNote = getString("custom_note"),
-                        depositCentimes = getLong("deposit_centimes")
+                        depositCentimes = getLong("deposit_centimes"),
+                        discountBasisPoints = nullInt("discount_basis_points")
                     )
                     id to order
                 }
@@ -2513,6 +2584,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                         "status" to order.status.name,
                         "subtotal_centimes" to order.subtotalCentimes,
                         "discount_centimes" to order.discountCentimes,
+                        "discount_basis_points" to order.discountBasisPoints,
                         "tax_centimes" to order.taxCentimes,
                         "total_centimes" to order.totalCentimes,
                         "customer_name" to order.customerName,
@@ -2527,8 +2599,8 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                 )
                 c.prepareStatement("DELETE FROM order_items WHERE order_id=?").use { it.setLong(1, id); it.executeUpdate() }
                 order.lines.forEach { line ->
-                    c.prepareStatement("INSERT INTO order_items(order_id,product_id,product_name,unit_price_centimes,tax_basis_points,quantity,line_total_centimes,category_id_snapshot,category_name_snapshot) VALUES(?,?,?,?,?,?,?,?,?)").use {
-                        it.setLong(1, id); it.setLong(2, line.productId); it.setString(3, line.name); it.setLong(4, line.unitPriceCentimes); it.setInt(5, line.taxRateBasisPoints); it.setInt(6, line.quantity); it.setLong(7, line.unitPriceCentimes * line.quantity); it.setObject(8, line.categoryIdSnapshot); it.setString(9, line.categoryNameSnapshot); it.executeUpdate()
+                    c.prepareStatement("INSERT INTO order_items(order_id,product_id,product_name,unit_price_centimes,tax_basis_points,quantity,line_total_centimes,category_id_snapshot,category_name_snapshot,item_discount_basis_points,recognized_amount_centimes,recognized_tax_centimes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").use {
+                        it.setLong(1, id); it.setLong(2, line.productId); it.setString(3, line.name); it.setLong(4, line.unitPriceCentimes); it.setInt(5, line.taxRateBasisPoints); it.setInt(6, line.quantity); it.setLong(7, line.unitPriceCentimes * line.quantity); it.setObject(8, line.categoryIdSnapshot); it.setString(9, line.categoryNameSnapshot); it.setObject(10, order.discountBasisPoints?.let { line.itemDiscountBasisPoints }); it.setObject(11, line.recognizedAmountCentimes); it.setObject(12, line.recognizedTaxCentimes); it.executeUpdate()
                     }
                 }
                 if(previousTableId!=null&&(previousTableId!=order.tableId||order.status!=OrderStatus.OPEN))releaseTableIfUnused(c,previousTableId,id)
@@ -2617,8 +2689,8 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
     private fun loadOrder(c:Connection,id:Long):Order?=c.prepareStatement("SELECT * FROM orders WHERE id=?").use { p->
         p.setLong(1,id);p.executeQuery().use { r->
             if(!r.next())return null
-            val lines=c.prepareStatement("SELECT product_id,product_name,unit_price_centimes,quantity,tax_basis_points,category_id_snapshot,category_name_snapshot FROM order_items WHERE order_id=? ORDER BY id").use { q->
-                q.setLong(1,id);q.executeQuery().use { x->x.map { OrderLine(getLong(1),getString(2),getLong(3),getInt(4),getInt(5),nullLong("category_id_snapshot"),getString("category_name_snapshot")) } }
+            val lines=c.prepareStatement("SELECT product_id,product_name,unit_price_centimes,quantity,tax_basis_points,category_id_snapshot,category_name_snapshot,item_discount_basis_points,recognized_amount_centimes,recognized_tax_centimes FROM order_items WHERE order_id=? ORDER BY id").use { q->
+                q.setLong(1,id);q.executeQuery().use { x->x.map { OrderLine(getLong(1),getString(2),getLong(3),getInt(4),getInt(5),nullLong("category_id_snapshot"),getString("category_name_snapshot"),getInt("item_discount_basis_points"),nullLong("recognized_amount_centimes"),nullLong("recognized_tax_centimes")) } }
             }
             val createdAt=r.getLong("created_at").takeIf{it>0L}?:r.getLong("updated_at")
             val prepStatusStr = r.getString("preparation_status")
@@ -2644,7 +2716,8 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                 pickupDateEpochMs = r.nullLong("pickup_date"),
                 preparationStatus = prepStatus,
                 customNote = r.getString("custom_note"),
-                depositCentimes = r.getLong("deposit_centimes")
+                depositCentimes = r.getLong("deposit_centimes"),
+                discountBasisPoints = r.nullInt("discount_basis_points")
             )
         }
     }
@@ -2653,7 +2726,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
         val result = mutableMapOf<Long, MutableList<OrderLine>>()
         orderIds.distinct().chunked(500).forEach { chunk ->
             val placeholders = chunk.joinToString(",") { "?" }
-            c.prepareStatement("SELECT order_id, product_id, product_name, unit_price_centimes, quantity, tax_basis_points, category_id_snapshot, category_name_snapshot FROM order_items WHERE order_id IN ($placeholders) ORDER BY id").use { stmt ->
+            c.prepareStatement("SELECT order_id, product_id, product_name, unit_price_centimes, quantity, tax_basis_points, category_id_snapshot, category_name_snapshot, item_discount_basis_points, recognized_amount_centimes, recognized_tax_centimes FROM order_items WHERE order_id IN ($placeholders) ORDER BY id").use { stmt ->
                 chunk.forEachIndexed { index, id -> stmt.setLong(index + 1, id) }
                 stmt.executeQuery().use { rs ->
                     while (rs.next()) {
@@ -2665,7 +2738,10 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                             quantity = rs.getInt(5),
                             taxRateBasisPoints = rs.getInt(6),
                             categoryIdSnapshot = rs.nullLong("category_id_snapshot"),
-                            categoryNameSnapshot = rs.getString("category_name_snapshot")
+                            categoryNameSnapshot = rs.getString("category_name_snapshot"),
+                            itemDiscountBasisPoints = rs.getInt("item_discount_basis_points"),
+                            recognizedAmountCentimes = rs.nullLong("recognized_amount_centimes"),
+                            recognizedTaxCentimes = rs.nullLong("recognized_tax_centimes")
                         )
                         result.getOrPut(orderId) { mutableListOf() }.add(line)
                     }
@@ -2676,6 +2752,7 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
     }
     private fun upsert(c:Connection,table:String,id:Long,values:List<Pair<String,Any?>>):Long { val columns=listOf("id")+values.map{it.first};val sql="INSERT INTO $table(${columns.joinToString()}) VALUES(${columns.joinToString{ "?" }}) ON CONFLICT(id) DO UPDATE SET ${values.joinToString { "${it.first}=excluded.${it.first}" }}";c.prepareStatement(sql).use { p->p.setLong(1,id);values.forEachIndexed { i,v->p.setObject(i+2,when(val x=v.second){is Boolean->if(x)1 else 0 else->x}) };p.executeUpdate() };return id }
     private fun ResultSet.nullLong(column:String):Long? { val value=getLong(column);return if(wasNull())null else value }
+    private fun ResultSet.nullInt(column:String):Int? { val value=getInt(column);return if(wasNull())null else value }
     private fun ResultSet.nullLong(index:Int):Long? { val value=getLong(index);return if(wasNull())null else value }
     private inline fun <T> ResultSet.map(block:ResultSet.()->T):List<T>{val out=mutableListOf<T>();while(next())out+=block();return out}
 

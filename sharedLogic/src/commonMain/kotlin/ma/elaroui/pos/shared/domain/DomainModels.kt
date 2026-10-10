@@ -82,7 +82,10 @@ data class OrderLine(
     val quantity: Int,
     val taxRateBasisPoints: Int = 0,
     val categoryIdSnapshot: Long? = null,
-    val categoryNameSnapshot: String? = null
+    val categoryNameSnapshot: String? = null,
+    val itemDiscountBasisPoints: Int = 0,
+    val recognizedAmountCentimes: Long? = null,
+    val recognizedTaxCentimes: Long? = null
 )
 
 data class Order(
@@ -104,7 +107,9 @@ data class Order(
     val pickupDateEpochMs: Long? = null,
     val preparationStatus: PreparationStatus = PreparationStatus.PENDING,
     val customNote: String? = null,
-    val depositCentimes: Long = 0L
+    val depositCentimes: Long = 0L,
+    /** Null identifies an order saved before discount rules were persisted. */
+    val discountBasisPoints: Int? = null
 ) {
     val balanceDueCentimes: Long
         get() = (totalCentimes - depositCentimes).coerceAtLeast(0L)

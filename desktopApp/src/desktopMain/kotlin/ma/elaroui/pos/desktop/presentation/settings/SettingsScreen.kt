@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,7 +39,7 @@ fun SettingsScreen(
     initialLogoPath: String,
     currentLanguage: DesktopLanguage,
     strings: DesktopStrings,
-    onSaveSettings: (company: ReceiptCompany, language: DesktopLanguage) -> Unit,
+    onSaveSettings: suspend (company: ReceiptCompany, language: DesktopLanguage) -> Unit,
     onImportLogo: () -> String?,
     onRemoveLogo: () -> Unit,
     onNavigateToPrinterSettings: () -> Unit = {},
@@ -47,13 +48,15 @@ fun SettingsScreen(
     onNavigateToDataManagement: () -> Unit = {},
     onNavigateToLicenseManagement: () -> Unit = {},
     isCancellationPinConfigured: Boolean = false,
-    onSetCancellationPin: (String) -> String? = { null },
-    onRemoveCancellationPin: () -> Unit = {},
+    onSetCancellationPin: suspend (String) -> String? = { null },
+    onRemoveCancellationPin: suspend () -> Unit = {},
     automaticSessionClosingReport: Boolean = true,
-    onAutomaticSessionClosingReportChanged: (Boolean) -> Unit = {},
+    onAutomaticSessionClosingReportChanged: suspend (Boolean) -> Unit = {},
     onBack: () -> Unit,
     message: String = ""
 ) {
+    val operationScope = rememberCoroutineScope()
+    var isSaving by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf(initialCompany.name) }
     var nameError by remember { mutableStateOf<String?>(null) }
     var specialty by remember { mutableStateOf(initialCompany.specialty) }
@@ -418,9 +421,16 @@ fun SettingsScreen(
                                 Switch(
                                     checked = autoPrintClosingReport,
                                     onCheckedChange = { enabled ->
-                                        autoPrintClosingReport = enabled
-                                        onAutomaticSessionClosingReportChanged(enabled)
+                                        if (!isSaving) {
+                                            isSaving = true
+                                            autoPrintClosingReport = enabled
+                                            operationScope.launch {
+                                                try { onAutomaticSessionClosingReportChanged(enabled) }
+                                                finally { isSaving = false }
+                                            }
+                                        }
                                     },
+                                    enabled = !isSaving,
                                     colors = SwitchDefaults.colors(
                                         checkedThumbColor = Color.White,
                                         checkedTrackColor = PosColors.Success,
@@ -569,10 +579,18 @@ fun SettingsScreen(
                                     if (hasCancellationPin) {
                                         OutlinedButton(
                                             onClick = {
-                                                onRemoveCancellationPin()
-                                                hasCancellationPin = false
-                                                uiMessage = UiMessage.success(strings.text("Code PIN d'annulation désactivé", "Cancellation PIN disabled", "تم تعطيل رمز PIN للإلغاء"))
+                                                if (!isSaving) {
+                                                    isSaving = true
+                                                    operationScope.launch {
+                                                        try {
+                                                            onRemoveCancellationPin()
+                                                            hasCancellationPin = false
+                                                            uiMessage = UiMessage.success(strings.text("Code PIN d'annulation désactivé", "Cancellation PIN disabled", "تم تعطيل رمز PIN للإلغاء"))
+                                                        } finally { isSaving = false }
+                                                    }
+                                                }
                                             },
+                                            enabled = !isSaving,
                                             shape = RoundedCornerShape(8.dp),
                                             border = BorderStroke(1.dp, PosColors.Danger.copy(alpha = 0.3f)),
                                             colors = ButtonDefaults.outlinedButtonColors(contentColor = PosColors.Danger),
@@ -612,11 +630,19 @@ fun SettingsScreen(
                                     wifiCode = initialCompany.wifiCode,
                                     printEstablishmentName = printEstablishmentName
                                 )
-                                onAutomaticSessionClosingReportChanged(autoPrintClosingReport)
-                                onSaveSettings(updated, selectedLanguage)
-                                uiMessage = UiMessage.success(strings.text("Paramètres enregistrés avec succès", "Settings saved successfully", "تم حفظ الإعدادات بنجاح"))
+                                if (!isSaving) {
+                                    isSaving = true
+                                    operationScope.launch {
+                                        try {
+                                            onAutomaticSessionClosingReportChanged(autoPrintClosingReport)
+                                            onSaveSettings(updated, selectedLanguage)
+                                            uiMessage = UiMessage.success(strings.text("Paramètres enregistrés avec succès", "Settings saved successfully", "تم حفظ الإعدادات بنجاح"))
+                                        } finally { isSaving = false }
+                                    }
+                                }
                             }
                         },
+                        enabled = !isSaving,
                         colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                         shape = RoundedCornerShape(10.dp),
                         elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
@@ -714,15 +740,21 @@ fun SettingsScreen(
                                 }
                                 return@Button
                             }
-                            val error = onSetCancellationPin(cancellationPinInput)
-                            if (error == null) {
-                                hasCancellationPin = true
-                                showCancellationPinDialog = false
-                                uiMessage = UiMessage.success(strings.text("Code PIN d'annulation enregistré avec succès", "Cancellation PIN saved successfully", "تم حفظ رمز PIN للإلغاء بنجاح"))
-                            } else {
-                                cancellationPinInputError = error
+                            if (!isSaving) {
+                                isSaving = true
+                                operationScope.launch {
+                                    try {
+                                        val error = onSetCancellationPin(cancellationPinInput)
+                                        if (error == null) {
+                                            hasCancellationPin = true
+                                            showCancellationPinDialog = false
+                                            uiMessage = UiMessage.success(strings.text("Code PIN d'annulation enregistré avec succès", "Cancellation PIN saved successfully", "تم حفظ رمز PIN للإلغاء بنجاح"))
+                                        } else cancellationPinInputError = error
+                                    } finally { isSaving = false }
+                                }
                             }
                         },
+                        enabled = !isSaving,
                         colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)

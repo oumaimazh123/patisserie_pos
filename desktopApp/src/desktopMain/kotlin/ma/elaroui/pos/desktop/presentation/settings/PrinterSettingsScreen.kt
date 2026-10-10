@@ -55,10 +55,11 @@ fun PrinterSettingsScreen(
     company: ReceiptCompany,
     strings: DesktopStrings,
     automaticSessionClosingReport: Boolean = true,
-    onAutomaticSessionClosingReportChanged: (Boolean) -> Unit = {},
-    onSavePrinterSettings: (customer: String, kitchen: String, width: Int, cashDrawerEnabled: Boolean) -> Unit,
+    onAutomaticSessionClosingReportChanged: suspend (Boolean) -> Unit = {},
+    onSavePrinterSettings: suspend (customer: String, kitchen: String, width: Int, cashDrawerEnabled: Boolean) -> Unit,
     printerService: PrinterService = remember { DesktopPrinterServiceFactory.create() },
     onNavigateToEstablishment: () -> Unit = {},
+    onNavigateToCustomerDisplay: () -> Unit = {},
     onNavigateToBackupRestore: () -> Unit = {},
     onNavigateToDataManagement: () -> Unit = {},
     onNavigateToLicense: () -> Unit = {},
@@ -88,6 +89,7 @@ fun PrinterSettingsScreen(
     val coroutineScope = rememberCoroutineScope()
     val isTestingRef = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     var isTesting by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
 
     suspend fun refreshPrinterStatus() {
         val discovery = withContext(Dispatchers.IO) { printerService.discoverPrinters() }
@@ -152,6 +154,7 @@ fun PrinterSettingsScreen(
             strings = strings,
             onNavigateToEstablishment = onNavigateToEstablishment,
             onNavigateToPrinters = {},
+            onNavigateToCustomerDisplay = onNavigateToCustomerDisplay,
             onNavigateToBackupRestore = onNavigateToBackupRestore,
             onNavigateToDataManagement = onNavigateToDataManagement,
             onNavigateToLicense = onNavigateToLicense
@@ -534,9 +537,16 @@ fun PrinterSettingsScreen(
                             Switch(
                                 checked = autoPrintClosingReport,
                                 onCheckedChange = {
-                                    autoPrintClosingReport = it
-                                    onAutomaticSessionClosingReportChanged(it)
+                                    if (!isSaving) {
+                                        isSaving = true
+                                        autoPrintClosingReport = it
+                                        coroutineScope.launch {
+                                            try { onAutomaticSessionClosingReportChanged(it) }
+                                            finally { isSaving = false }
+                                        }
+                                    }
                                 },
+                                enabled = !isSaving,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
                                     checkedTrackColor = PosColors.Success,
@@ -574,24 +584,30 @@ fun PrinterSettingsScreen(
                     ) {
                         Button(
                             onClick = {
+                                if (isSaving) return@Button
+                                isSaving = true
                                 val selectedWidth = if (width.trim() == "58") 58 else 80
-                                val customerValidation = printerService.validateConfiguration(customerPrinter.trim())
-                                val validationFailure = customerValidation.takeIf { !it.success }
-                                if (validationFailure != null) {
-                                    customerPrinterError = validationFailure.errorMessage ?: validationFailure.message
-                                    return@Button
+                                coroutineScope.launch {
+                                    try {
+                                        val validation = withContext(Dispatchers.IO) {
+                                            printerService.validateConfiguration(customerPrinter.trim())
+                                        }
+                                        if (!validation.success) {
+                                            customerPrinterError = validation.errorMessage ?: validation.message
+                                            return@launch
+                                        }
+                                        withContext(Dispatchers.IO) { printerService.recordSelection(customerPrinter.trim()) }
+                                        onAutomaticSessionClosingReportChanged(autoPrintClosingReport)
+                                        onSavePrinterSettings(customerPrinter.trim(), "", selectedWidth, openDrawerAfterCashPayment)
+                                        uiMessage = UiMessage.success(strings.text(
+                                            "Configuration de l'imprimante enregistrée avec succès.",
+                                            "Printer settings saved successfully.",
+                                            "تم حفظ إعدادات الطابعة بنجاح."
+                                        ))
+                                    } finally { isSaving = false }
                                 }
-                                printerService.recordSelection(customerPrinter.trim())
-                                onAutomaticSessionClosingReportChanged(autoPrintClosingReport)
-                                onSavePrinterSettings(customerPrinter.trim(), "", selectedWidth, openDrawerAfterCashPayment)
-                                uiMessage = UiMessage.success(
-                                    strings.text(
-                                        "Configuration de l'imprimante enregistrée avec succès.",
-                                        "Printer settings saved successfully.",
-                                        "تم حفظ إعدادات الطابعة بنجاح."
-                                    )
-                                )
                             },
+                            enabled = !isSaving,
                             colors = ButtonDefaults.buttonColors(containerColor = PosColors.Primary),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier

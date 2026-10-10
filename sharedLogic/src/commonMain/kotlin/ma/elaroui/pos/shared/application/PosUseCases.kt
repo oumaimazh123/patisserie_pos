@@ -62,6 +62,8 @@ class CreateOrder(
                 return UseCaseResult.Failure("Order belongs to another user session")
         }
         if (lineItems.isEmpty()) return UseCaseResult.Failure("Order cannot be empty")
+        if (lineItems.map { it.first }.distinct().size != lineItems.size)
+            return UseCaseResult.Failure("Duplicate product line")
         if (type != OrderType.DINE_IN && tableId != null) return UseCaseResult.Failure("Only dine-in orders can use a table")
         if (tableId != null) {
             val table=tables.findById(tableId) ?: return UseCaseResult.Failure("Table not found")
@@ -97,12 +99,20 @@ class CreateOrder(
             if (preorderError != null) return UseCaseResult.Failure("Erreur précommande: $preorderError")
         }
 
+        val recognizedLines = lines.mapIndexed { index, line ->
+            val amounts = calculation.lineAmounts[index]
+            line.copy(
+                itemDiscountBasisPoints = itemDiscountsBasisPoints[line.productId] ?: 0,
+                recognizedAmountCentimes = amounts.amountCentimes,
+                recognizedTaxCentimes = amounts.taxCentimes
+            )
+        }
         val order = Order(
             id = id,
             number = number,
             type = type,
             status = OrderStatus.OPEN,
-            lines = lines,
+            lines = recognizedLines,
             subtotalCentimes = calculation.subtotalCentimes,
             discountCentimes = calculation.discountCentimes,
             taxCentimes = calculation.taxCentimes,
@@ -116,7 +126,8 @@ class CreateOrder(
             pickupDateEpochMs = pickupDateEpochMs,
             preparationStatus = preparationStatus,
             customNote = customNote?.trim()?.takeIf { it.isNotBlank() },
-            depositCentimes = depositCentimes
+            depositCentimes = depositCentimes,
+            discountBasisPoints = discountBasisPoints
         )
 
         val saveResult = orders.save(order)

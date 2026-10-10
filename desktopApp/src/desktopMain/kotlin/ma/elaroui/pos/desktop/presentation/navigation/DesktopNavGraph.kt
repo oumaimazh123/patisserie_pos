@@ -23,10 +23,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import org.jetbrains.skia.Image
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ma.elaroui.pos.desktop.DesktopLanguage
 import ma.elaroui.pos.desktop.DesktopStrings
@@ -668,11 +670,29 @@ class DesktopNavState(
     fun holdOrder() = saveDraft(proceedToPayment = false)
 
     fun resumeOrder(order: Order) {
+        if (order.discountBasisPoints == null && order.discountCentimes > 0L) {
+            // Pre-v12 orders did not record the discount rules. Charging the saved
+            // total is safe; editing would silently recalculate an unknowable rule.
+            cart.clear()
+            itemDiscountsBasisPoints.clear()
+            editingOrderId = null
+            pendingOrder = order
+            currentRoute = DesktopScreenRoute.PAYMENT
+            showWarning(strings.text(
+                "Remise historique : montant conservé. Cette vente ne peut pas être modifiée.",
+                "Legacy discount: saved amount preserved. This sale cannot be edited.",
+                "خصم قديم: تم حفظ المبلغ الأصلي ولا يمكن تعديل هذا البيع."
+            ))
+            return
+        }
         cart.clear()
         itemDiscountsBasisPoints.clear()
         order.lines.forEach { cart[it.productId] = it.quantity }
+        order.lines.forEach { line ->
+            if (line.itemDiscountBasisPoints > 0) itemDiscountsBasisPoints[line.productId] = line.itemDiscountBasisPoints
+        }
         editingOrderId = order.id
-        discountBasisPoints = if (order.subtotalCentimes > 0) {
+        discountBasisPoints = order.discountBasisPoints ?: if (order.subtotalCentimes > 0) {
             ((order.discountCentimes * 10_000L) / order.subtotalCentimes).toInt()
         } else 0
         pendingOrder = null
@@ -835,7 +855,7 @@ class DesktopNavState(
         }
         try {
             val result = printCompletedSaleReceipt(confirmation)
-            dismissCompletedSale()
+            if (result.success) dismissCompletedSale()
             return result
         } finally {
             isFinalizingSale.set(false)
@@ -1326,6 +1346,13 @@ fun DesktopNavGraph(
     }
 }
 
+private data class SessionScreenData(
+    val cashSales: Long,
+    val nonCashSales: Long,
+    val sales: List<SalesHistoryRow>,
+    val activeOrders: Int
+)
+
 @Composable
 private fun DesktopShell(
     state: DesktopNavState,
@@ -1351,6 +1378,27 @@ private fun DesktopShell(
     var catalogImportSourcePath by remember { mutableStateOf<Path?>(null) }
     var catalogImportAnalysis by remember { mutableStateOf<CatalogImportAnalysis?>(null) }
     var showCatalogImportDialog by remember { mutableStateOf(false) }
+    val operationScope = rememberCoroutineScope()
+    var isSavingOrder by remember { mutableStateOf(false) }
+    var isSubmittingPayment by remember { mutableStateOf(false) }
+    var isChangingActiveOrder by remember { mutableStateOf(false) }
+    var isRecordingCashMovement by remember { mutableStateOf(false) }
+    var isPrintingSessionReport by remember { mutableStateOf(false) }
+    var isCatalogActionBusy by remember { mutableStateOf(false) }
+    val sessionScreenData by produceState<SessionScreenData?>(null, state.currentRoute, state.session?.id) {
+        value = null
+        val sessionId = state.session?.id
+        if (sessionId != null && state.currentRoute in setOf(DesktopScreenRoute.CURRENT_SESSION, DesktopScreenRoute.CLOSE_REGISTER)) {
+            value = withContext(Dispatchers.IO) {
+                SessionScreenData(
+                    cashSales = state.db.payments.totalCashForSession(sessionId),
+                    nonCashSales = state.db.payments.totalNonCashForSession(sessionId),
+                    sales = state.db.salesHistory(sessionId = sessionId),
+                    activeOrders = state.db.countOpenOrdersForSession(sessionId)
+                )
+            }
+        }
+    }
     val requestLogout = {
         if (state.session?.cashierId == user.id && state.session?.status == RegisterSessionStatus.OPEN) {
             showLogoutReminder = true
@@ -1400,13 +1448,18 @@ private fun DesktopShell(
                     // Managed by top-level DesktopNavGraph container
                 }
                 DesktopScreenRoute.DASHBOARD -> {
-                    var todaySummary by remember(state.currentRoute) { mutableStateOf(state.db.todaySalesSummary()) }
+                    var todaySummary by remember(state.currentRoute) { mutableStateOf(SalesSummary(0, 0L, 0L, 0L, 0L)) }
+                    var todayLoaded by remember(state.currentRoute) { mutableStateOf(false) }
                     LaunchedEffect(state.currentRoute) {
                         while (isActive) {
-                            todaySummary = state.db.todaySalesSummary()
+                            todaySummary = withContext(Dispatchers.IO) { state.db.todaySalesSummary() }
+                            todayLoaded = true
                             delay(5_000L)
                         }
                     }
+                    if (!todayLoaded) {
+                        CircularProgressIndicator()
+                    } else {
                     DashboardScreen(
                         summary = todaySummary,
                         strings = strings,
@@ -1425,6 +1478,7 @@ private fun DesktopShell(
                         isFullscreen = isFullscreen,
                         onToggleWindowMode = onToggleWindowMode
                     )
+                    }
                 }
                 DesktopScreenRoute.POS_MAIN -> {
                     POSMainScreen(
@@ -1436,43 +1490,70 @@ private fun DesktopShell(
                         cart = state.cart,
                         discountBasisPoints = state.discountBasisPoints,
                         itemDiscountsBasisPoints = state.itemDiscountsBasisPoints,
+                        isSavingOrder = isSavingOrder,
                         strings = strings,
                         autoOpenCategoryPicker = state.autoOpenCategoryPickerOnPosMain,
                         onProductClicked = { p ->
-                            state.cart[p.id] = (state.cart[p.id] ?: 0) + 1
-                            state.syncCustomerDisplayCart()
+                            if (!isSavingOrder) {
+                                state.cart[p.id] = (state.cart[p.id] ?: 0) + 1
+                                state.syncCustomerDisplayCart()
+                            }
                         },
                         onQuantityChanged = { pid, q ->
-                            if (q <= 0) {
-                                state.cart.remove(pid)
-                                state.itemDiscountsBasisPoints.remove(pid)
-                            } else {
-                                state.cart[pid] = q
+                            if (!isSavingOrder) {
+                                if (q <= 0) {
+                                    state.cart.remove(pid)
+                                    state.itemDiscountsBasisPoints.remove(pid)
+                                } else {
+                                    state.cart[pid] = q
+                                }
+                                state.syncCustomerDisplayCart()
                             }
-                            state.syncCustomerDisplayCart()
                         },
                         onDiscountChanged = {
-                            state.discountBasisPoints = it.coerceIn(0, 10_000)
-                            state.syncCustomerDisplayCart()
+                            if (!isSavingOrder) {
+                                state.discountBasisPoints = it.coerceIn(0, 10_000)
+                                state.syncCustomerDisplayCart()
+                            }
                         },
                         onItemDiscountChanged = { pid, bps ->
-                            if (bps <= 0) {
-                                state.itemDiscountsBasisPoints.remove(pid)
-                            } else {
-                                state.itemDiscountsBasisPoints[pid] = bps.coerceIn(0, 10_000)
+                            if (!isSavingOrder) {
+                                if (bps <= 0) {
+                                    state.itemDiscountsBasisPoints.remove(pid)
+                                } else {
+                                    state.itemDiscountsBasisPoints[pid] = bps.coerceIn(0, 10_000)
+                                }
+                                state.syncCustomerDisplayCart()
                             }
-                            state.syncCustomerDisplayCart()
                         },
-                        onHoldOrder = { state.holdOrder() },
-                        onProceedToPayment = { state.createOrder() },
+                        onHoldOrder = {
+                            if (!isSavingOrder) {
+                                isSavingOrder = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { state.holdOrder() } }
+                                    finally { isSavingOrder = false }
+                                }
+                            }
+                        },
+                        onProceedToPayment = {
+                            if (!isSavingOrder) {
+                                isSavingOrder = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { state.createOrder() } }
+                                    finally { isSavingOrder = false }
+                                }
+                            }
+                        },
                         onClearCart = {
-                            state.cart.clear()
-                            state.itemDiscountsBasisPoints.clear()
-                            state.editingOrderId = null
-                            state.discountBasisPoints = 0
-                            state.syncCustomerDisplayCart()
+                            if (!isSavingOrder) {
+                                state.cart.clear()
+                                state.itemDiscountsBasisPoints.clear()
+                                state.editingOrderId = null
+                                state.discountBasisPoints = 0
+                                state.syncCustomerDisplayCart()
+                            }
                         },
-                        onBarcodeScanned = { barcode -> state.onBarcodeScanned(barcode) },
+                        onBarcodeScanned = { barcode -> if (!isSavingOrder) state.onBarcodeScanned(barcode) },
                         message = state.message,
                         uiMessage = state.uiMessage,
                         onClearMessage = { state.clearMessage() }
@@ -1486,11 +1567,29 @@ private fun DesktopShell(
                         onResumeOrder = { o -> state.resumeOrder(o) },
                         onPaymentOrder = { o -> state.pendingOrder = o; state.navigateTo(DesktopScreenRoute.PAYMENT) },
                         onCancelOrder = { id, reason, pin ->
-                            runCatching { state.db.cancelOrder(id, reason, user.id, pin) }
-                                .onFailure { state.showError(strings.text("Annulation impossible", "Cancellation failed", "تعذر الإلغاء") + if (!it.message.isNullOrBlank()) ": ${it.message}" else "") }
-                            state.refresh()
+                            if (!isChangingActiveOrder) {
+                                isChangingActiveOrder = true
+                                operationScope.launch {
+                                    try {
+                                        val result = withContext(Dispatchers.IO) { runCatching { state.db.cancelOrder(id, reason, user.id, pin) } }
+                                        result.onFailure { state.showError(strings.text("Annulation impossible", "Cancellation failed", "تعذر الإلغاء") + if (!it.message.isNullOrBlank()) ": ${it.message}" else "") }
+                                        withContext(Dispatchers.IO) { state.refresh() }
+                                    } finally { isChangingActiveOrder = false }
+                                }
+                            }
                         },
-                        onMoveOrderTable = { id, tid -> runCatching { state.db.moveOrder(id, tid) }; state.refresh() },
+                        onMoveOrderTable = { id, tid ->
+                            if (!isChangingActiveOrder) {
+                                isChangingActiveOrder = true
+                                operationScope.launch {
+                                    try {
+                                        val result = withContext(Dispatchers.IO) { runCatching { state.db.moveOrder(id, tid) } }
+                                        result.onFailure { state.showError(it.message ?: strings.text("Déplacement impossible", "Move failed", "تعذر النقل")) }
+                                        withContext(Dispatchers.IO) { state.refresh() }
+                                    } finally { isChangingActiveOrder = false }
+                                }
+                            }
+                        },
                         isCancellationPinRequired = !isOwner && state.db.isOrderCancellationPinConfigured(),
                         onVerifyCancellationPin = { pin -> state.db.verifyOrderCancellationPin(pin) },
                         onBack = { state.navigateTo(DesktopScreenRoute.POS_MAIN) }
@@ -1504,8 +1603,16 @@ private fun DesktopShell(
                         PaymentScreen(
                             order = order,
                             strings = strings,
-                            isSubmitting = state.isPaymentProcessing || state.completedSaleConfirmation != null,
-                            onPaymentSubmitted = { m, r -> state.pay(m, r) },
+                            isSubmitting = isSubmittingPayment || state.isPaymentProcessing || state.completedSaleConfirmation != null,
+                            onPaymentSubmitted = { m, r ->
+                                if (!isSubmittingPayment) {
+                                    isSubmittingPayment = true
+                                    operationScope.launch {
+                                        try { withContext(Dispatchers.IO) { state.pay(m, r) } }
+                                        finally { isSubmittingPayment = false }
+                                    }
+                                }
+                            },
                             onBack = {
                                 if (state.completedSaleConfirmation != null) {
                                     state.dismissCompletedSale()
@@ -1563,19 +1670,27 @@ private fun DesktopShell(
                     state.navigateTo(DesktopScreenRoute.POS_MAIN)
                 }
                 DesktopScreenRoute.CURRENT_SESSION -> {
-                    val openSess = state.session
-                    val cashSales = runBlocking { openSess?.let { state.db.payments.totalCashForSession(it.id) } ?: 0L }
-                    val cardSales = runBlocking { openSess?.let { state.db.payments.totalNonCashForSession(it.id) } ?: 0L }
-                    val sales = runBlocking { openSess?.let { state.db.salesHistory(sessionId = it.id) } ?: emptyList() }
+                    val metrics = sessionScreenData
+                    if (state.session != null && metrics == null) {
+                        CircularProgressIndicator()
+                    } else {
                     CurrentSessionScreen(
                         session = state.session,
                         cashMovements = state.cashMovements,
-                        cashSalesCentimes = cashSales,
-                        cardSalesCentimes = cardSales,
-                        sessionSales = sales,
+                        cashSalesCentimes = metrics?.cashSales ?: 0L,
+                        cardSalesCentimes = metrics?.nonCashSales ?: 0L,
+                        sessionSales = metrics?.sales.orEmpty(),
                         strings = strings,
                         canCloseRegister = state.currentUser != null,
-                        onCashMovementSubmitted = { t, a, r -> state.movement(t, a, r) },
+                        onCashMovementSubmitted = { t, a, r ->
+                            if (!isRecordingCashMovement) {
+                                isRecordingCashMovement = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { state.movement(t, a, r) } }
+                                    finally { isRecordingCashMovement = false }
+                                }
+                            }
+                        },
                         onNavigateToReceipt = { order ->
                             state.pendingOrder = order
                             state.selectedReceiptKind = TicketKind.CUSTOMER
@@ -1588,18 +1703,21 @@ private fun DesktopShell(
                         uiMessage = state.uiMessage,
                         onClearMessage = { state.clearMessage() }
                     )
+                    }
                 }
                 DesktopScreenRoute.CLOSE_REGISTER -> {
                     val openSess = state.session
                     if (openSess == null) {
                         state.navigateTo(DesktopScreenRoute.POS_MAIN)
+                    } else if (sessionScreenData == null) {
+                        CircularProgressIndicator()
                     } else {
-                        val cashSales = runBlocking { state.db.payments.totalCashForSession(openSess.id) }
-                        val cardSales = runBlocking { state.db.payments.totalNonCashForSession(openSess.id) }
+                        val cashSales = sessionScreenData!!.cashSales
+                        val cardSales = sessionScreenData!!.nonCashSales
                         val totalIn = state.cashMovements.filter { it.type == CashMovementType.CASH_IN }.sumOf { it.amountCentimes }
                         val totalOut = state.cashMovements.filter { it.type == CashMovementType.CASH_OUT }.sumOf { it.amountCentimes }
                         val expected = openSess.openingCashCentimes + cashSales + totalIn - totalOut
-                        val activeOrdersCount = runBlocking { state.db.countOpenOrdersForSession(openSess.id) }
+                        val activeOrdersCount = sessionScreenData!!.activeOrders
 
                         CloseRegisterScreen(
                             openingCashCentimes = openSess.openingCashCentimes,
@@ -1611,7 +1729,7 @@ private fun DesktopShell(
                             activeOrdersCount = activeOrdersCount,
                             cashierName = state.currentUser?.name.orEmpty(),
                             strings = strings,
-                            onCloseRegisterSubmitted = { input -> state.closeRegister(input) },
+                            onCloseRegisterSubmitted = { input -> withContext(Dispatchers.IO) { state.closeRegister(input) } },
                             onNavigateToActiveOrders = { state.navigateTo(DesktopScreenRoute.ACTIVE_ORDERS) },
                             onBack = { state.navigateTo(DesktopScreenRoute.CURRENT_SESSION) },
                             errorMessage = state.message,
@@ -1628,17 +1746,26 @@ private fun DesktopShell(
                     sessions = state.sessionHistory,
                     strings = strings,
                     onReprintClosingReport = { sessionId, type ->
-                        val result = state.printSessionClosingReport(sessionId, type = type, isReprint = true)
-                        if (result.success) {
-                            state.pendingClosingReportRetrySessionId = null
-                            val successMsg = when (type) {
-                                SessionReportType.SUMMARY -> strings.text("Rapport résumé envoyé à l’imprimante", "Summary report sent to printer", "تم إرسال التقرير الملخص إلى الطابعة")
-                                SessionReportType.DETAILED -> strings.text("Rapport détaillé envoyé à l’imprimante", "Detailed report sent to printer", "تم إرسال التقرير المفصل إلى الطابعة")
+                        if (!isPrintingSessionReport) {
+                            isPrintingSessionReport = true
+                            operationScope.launch {
+                                try {
+                                    val result = withContext(Dispatchers.IO) {
+                                        state.printSessionClosingReport(sessionId, type = type, isReprint = true)
+                                    }
+                                    if (result.success) {
+                                        state.pendingClosingReportRetrySessionId = null
+                                        val successMsg = when (type) {
+                                            SessionReportType.SUMMARY -> strings.text("Rapport résumé envoyé à l’imprimante", "Summary report sent to printer", "تم إرسال التقرير الملخص إلى الطابعة")
+                                            SessionReportType.DETAILED -> strings.text("Rapport détaillé envoyé à l’imprimante", "Detailed report sent to printer", "تم إرسال التقرير المفصل إلى الطابعة")
+                                        }
+                                        state.showSuccess(successMsg)
+                                    } else {
+                                        state.pendingClosingReportRetrySessionId = sessionId
+                                        state.showError(result.errorMessage ?: result.message, MessagePresentation.PERSISTENT)
+                                    }
+                                } finally { isPrintingSessionReport = false }
                             }
-                            state.showSuccess(successMsg)
-                        } else {
-                            state.pendingClosingReportRetrySessionId = sessionId
-                            state.showError(result.errorMessage ?: result.message, MessagePresentation.PERSISTENT)
                         }
                     },
                     onBack = { state.navigateTo(DesktopScreenRoute.DASHBOARD) }
@@ -1651,10 +1778,12 @@ private fun DesktopShell(
                         strings = strings,
                         onSaveProduct = { p ->
                             val previousPath = state.products.firstOrNull { it.id == p.id }?.imagePath
-                            when (val result = runBlocking { SaveProduct(state.db.categories, state.db.products).execute(p) }) {
+                            when (val result = withContext(Dispatchers.IO) { SaveProduct(state.db.categories, state.db.products).execute(p) }) {
                                 is UseCaseResult.Success -> {
-                                    if (previousPath != p.imagePath) state.deleteManagedProductImage(previousPath)
-                                    state.refresh()
+                                    withContext(Dispatchers.IO) {
+                                        if (previousPath != p.imagePath) state.deleteManagedProductImage(previousPath)
+                                        state.refresh()
+                                    }
                                     null
                                 }
                                 is UseCaseResult.Failure -> {
@@ -1670,13 +1799,27 @@ private fun DesktopShell(
                             }
                         },
                         onToggleProductActive = { p ->
-                            val newActive = !p.active
-                            runBlocking { state.db.products.save(p.copy(active = newActive, available = newActive)) }
-                            state.refresh()
+                            if (!isCatalogActionBusy) {
+                                isCatalogActionBusy = true
+                                operationScope.launch {
+                                    try {
+                                        val newActive = !p.active
+                                        withContext(Dispatchers.IO) {
+                                            state.db.products.save(p.copy(active = newActive, available = newActive))
+                                            state.refresh()
+                                        }
+                                    } finally { isCatalogActionBusy = false }
+                                }
+                            }
                         },
                         onSoftDeleteProduct = { p ->
-                            runBlocking { state.db.softDeleteProduct(p.id) }
-                            state.refresh()
+                            if (!isCatalogActionBusy) {
+                                isCatalogActionBusy = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { state.db.softDeleteProduct(p.id); state.refresh() } }
+                                    finally { isCatalogActionBusy = false }
+                                }
+                            }
                         },
                         onImportImage = {
                             val selected = NativeFileDialogs.selectImage(strings.text("Choisir une image", "Select image", "اختيار صورة"))
@@ -1710,15 +1853,15 @@ private fun DesktopShell(
                         products = state.products,
                         strings = strings,
                         onSaveCategory = { cat ->
-                            val result = runCatching {
+                            val result = withContext(Dispatchers.IO) { runCatching {
                                 val prevCat = state.categories.firstOrNull { it.id == cat.id }
-                                runBlocking { state.db.categories.save(cat) }
+                                state.db.categories.save(cat)
                                 if (prevCat?.imagePath != null && prevCat.imagePath != cat.imagePath) {
                                     state.deleteManagedCategoryImage(prevCat.imagePath)
                                 }
-                            }
+                            } }
                             if (result.isSuccess) {
-                                state.refresh()
+                                withContext(Dispatchers.IO) { state.refresh() }
                                 null
                             } else {
                                 val err = result.exceptionOrNull()
@@ -1738,14 +1881,24 @@ private fun DesktopShell(
                             }
                         },
                         onToggleCategoryActive = { cat ->
-                            runBlocking {
-                                state.db.categories.save(cat.copy(active = !cat.active))
+                            if (!isCatalogActionBusy) {
+                                isCatalogActionBusy = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) {
+                                        state.db.categories.save(cat.copy(active = !cat.active))
+                                        state.refresh()
+                                    } } finally { isCatalogActionBusy = false }
+                                }
                             }
-                            state.refresh()
                         },
                         onSoftDeleteCategory = { cat ->
-                            runBlocking { state.db.softDeleteCategory(cat.id) }
-                            state.refresh()
+                            if (!isCatalogActionBusy) {
+                                isCatalogActionBusy = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { state.db.softDeleteCategory(cat.id); state.refresh() } }
+                                    finally { isCatalogActionBusy = false }
+                                }
+                            }
                         },
                         onImportCsv = {
                             val selected = NativeFileDialogs.selectCsv(strings.text("Importer le catalogue CSV", "Import catalog CSV", "استيراد كتالوج CSV"))
@@ -1766,12 +1919,12 @@ private fun DesktopShell(
                         tables = state.tables,
                         strings = strings,
                         onSaveArea = { a ->
-                            val result = runCatching {
+                            val result = withContext(Dispatchers.IO) { runCatching {
                                 val previousPath = state.areas.firstOrNull { it.id == a.id }?.imagePath
                                 state.db.saveArea(a)
                                 if (previousPath != a.imagePath) state.deleteManagedAreaImage(previousPath)
                                 state.refresh()
-                            }
+                            } }
                             if (result.isSuccess) null
                             else {
                                 val err = result.exceptionOrNull()
@@ -1779,16 +1932,29 @@ private fun DesktopShell(
                                 else strings.text("Erreur lors de l'enregistrement de l'espace", "Error saving area", "خطأ أثناء حفظ المساحة")
                             }
                         },
-                        onToggleAreaActive = { a -> state.db.saveArea(a.copy(active = !a.active)); state.refresh() },
+                        onToggleAreaActive = { a ->
+                            if (!isCatalogActionBusy) {
+                                isCatalogActionBusy = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { state.db.saveArea(a.copy(active = !a.active)); state.refresh() } }
+                                    finally { isCatalogActionBusy = false }
+                                }
+                            }
+                        },
                         onSoftDeleteArea = { a ->
-                            runBlocking { state.db.softDeleteArea(a.id) }
-                            state.refresh()
+                            if (!isCatalogActionBusy) {
+                                isCatalogActionBusy = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { state.db.softDeleteArea(a.id); state.refresh() } }
+                                    finally { isCatalogActionBusy = false }
+                                }
+                            }
                         },
                         onSaveTable = { aid, name ->
-                            val result = runCatching {
+                            val result = withContext(Dispatchers.IO) { runCatching {
                                 state.db.createTable(aid, name)
                                 state.refresh()
-                            }
+                            } }
                             if (result.isSuccess) null
                             else {
                                 val err = result.exceptionOrNull()
@@ -1797,10 +1963,10 @@ private fun DesktopShell(
                             }
                         },
                         onUpdateTable = { tid, name, aid ->
-                            val result = runCatching {
+                            val result = withContext(Dispatchers.IO) { runCatching {
                                 state.db.updateTable(tid, name, aid)
                                 state.refresh()
-                            }
+                            } }
                             if (result.isSuccess) null
                             else {
                                 val err = result.exceptionOrNull()
@@ -1809,16 +1975,31 @@ private fun DesktopShell(
                             }
                         },
                         onTableStatusChanged = { tid, s ->
-                            runBlocking { ChangeTableStatus(state.db.tables).execute(tid, s) }
-                            state.refresh()
+                            if (!isCatalogActionBusy) {
+                                isCatalogActionBusy = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { ChangeTableStatus(state.db.tables).execute(tid, s); state.refresh() } }
+                                    finally { isCatalogActionBusy = false }
+                                }
+                            }
                         },
                         onToggleTableActive = { t ->
-                            runBlocking { state.db.tables.save(t.copy(active = !t.active)) }
-                            state.refresh()
+                            if (!isCatalogActionBusy) {
+                                isCatalogActionBusy = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { state.db.tables.save(t.copy(active = !t.active)); state.refresh() } }
+                                    finally { isCatalogActionBusy = false }
+                                }
+                            }
                         },
                         onSoftDeleteTable = { t ->
-                            runBlocking { state.db.softDeleteTable(t.id) }
-                            state.refresh()
+                            if (!isCatalogActionBusy) {
+                                isCatalogActionBusy = true
+                                operationScope.launch {
+                                    try { withContext(Dispatchers.IO) { state.db.softDeleteTable(t.id); state.refresh() } }
+                                    finally { isCatalogActionBusy = false }
+                                }
+                            }
                         },
                         onImportImage = {
                             val selected = NativeFileDialogs.selectImage(strings.text("Choisir une image", "Select image", "اختيار صورة"))
@@ -1839,21 +2020,21 @@ private fun DesktopShell(
                         users = state.users,
                         strings = strings,
                         onCreateCashier = { name, pin ->
-                            runCatching { state.db.createCashier(name, pin); state.refresh() }
+                            withContext(Dispatchers.IO) { runCatching { state.db.createCashier(name, pin); state.refresh() } }
                                 .exceptionOrNull()?.let { if (it is DesktopValidationException) strings.duplicatePin else it.message }
                         },
                         onUpdateCashier = { id, name, pin, active ->
-                            runCatching { state.db.updateCashier(id, name, pin, active); state.refresh() }
+                            withContext(Dispatchers.IO) { runCatching { state.db.updateCashier(id, name, pin, active); state.refresh() } }
                                 .exceptionOrNull()?.let { if (it is DesktopValidationException) strings.duplicatePin else it.message }
                         },
                         onSoftDeleteCashier = { u ->
-                            runCatching {
-                                state.db.softDeleteCashier(u.id)
-                                state.refresh()
-                            }.onFailure { state.showError(it.message ?: "") }
+                            operationScope.launch {
+                                withContext(Dispatchers.IO) { runCatching { state.db.softDeleteCashier(u.id); state.refresh() } }
+                                    .onFailure { state.showError(it.message ?: "") }
+                            }
                         },
                         onUpdateOwnerPin = { newPin ->
-                            runCatching { state.db.updateOwnerPin(newPin); state.refresh() }
+                            withContext(Dispatchers.IO) { runCatching { state.db.updateOwnerPin(newPin); state.refresh() } }
                                 .exceptionOrNull()?.let { if (it is DesktopValidationException) strings.duplicatePin else it.message }
                         },
                         onBack = { state.navigateTo(DesktopScreenRoute.DASHBOARD) },
@@ -1919,16 +2100,16 @@ private fun DesktopShell(
                         SessionClosingReportRules.isAutoPrintEnabled(state.db.settings.get(SESSION_CLOSING_REPORT_SETTING))
                     },
                     onAutomaticSessionClosingReportChanged = { enabled ->
-                        state.setAutomaticSessionClosingReport(enabled)
+                        withContext(Dispatchers.IO) { state.setAutomaticSessionClosingReport(enabled) }
                     },
                         onSetCancellationPin = { pin ->
-                            runCatching { state.db.setOrderCancellationPin(pin) }.exceptionOrNull()?.message
+                            withContext(Dispatchers.IO) { runCatching { state.db.setOrderCancellationPin(pin) } }.exceptionOrNull()?.message
                         },
                         onRemoveCancellationPin = {
-                            state.db.removeOrderCancellationPin()
+                            withContext(Dispatchers.IO) { state.db.removeOrderCancellationPin() }
                         },
                         onSaveSettings = { company, lang ->
-                            runBlocking {
+                            withContext(Dispatchers.IO) {
                                 mapOf(
                                     "establishment_name" to company.name,
                                     "establishment_specialty" to company.specialty,
@@ -1943,8 +2124,8 @@ private fun DesktopShell(
                                     "print_establishment_name" to company.printEstablishmentName.toString(),
                                     "selected_language" to lang.code
                                 ).forEach { (k, v) -> state.db.settings.put(AppSetting(k, v)) }
+                                state.invalidateCompany()
                             }
-                            state.invalidateCompany()
                             state.language = lang
                             state.showSuccess(strings.text("Paramètres enregistrés avec succès", "Settings saved successfully", "تم حفظ الإعدادات بنجاح"))
                         },
@@ -1976,7 +2157,7 @@ private fun DesktopShell(
                         controller = state.customerDisplayController,
                         strings = strings,
                         onSaveSettings = { cfg ->
-                            runBlocking {
+                            withContext(Dispatchers.IO) {
                                 CustomerDisplaySettingsRepository.saveConfig(state.db.settings, cfg)
                             }
                         },
@@ -2010,10 +2191,10 @@ private fun DesktopShell(
                             SessionClosingReportRules.isAutoPrintEnabled(state.db.settings.get(SESSION_CLOSING_REPORT_SETTING))
                         },
                         onAutomaticSessionClosingReportChanged = { enabled ->
-                            state.setAutomaticSessionClosingReport(enabled)
+                            withContext(Dispatchers.IO) { state.setAutomaticSessionClosingReport(enabled) }
                         },
                         onSavePrinterSettings = { cust, _, w, drawerEnabled ->
-                            runBlocking {
+                            withContext(Dispatchers.IO) {
                                 state.db.settings.put(AppSetting("customer_printer", cust.trim().ifBlank { defaultFallback }))
                                 state.db.settings.put(AppSetting("kitchen_printer", ""))
                                 state.db.settings.put(AppSetting("printer_width", w.toString()))
@@ -2021,6 +2202,7 @@ private fun DesktopShell(
                             }
                         },
                         onNavigateToEstablishment = { state.navigateTo(DesktopScreenRoute.SETTINGS) },
+                        onNavigateToCustomerDisplay = { state.navigateTo(DesktopScreenRoute.CUSTOMER_DISPLAY_SETTINGS) },
                         onNavigateToBackupRestore = { state.navigateTo(DesktopScreenRoute.BACKUP_RESTORE) },
                         onNavigateToDataManagement = { state.navigateTo(DesktopScreenRoute.DATA_MANAGEMENT) },
                         onNavigateToLicense = { state.navigateTo(DesktopScreenRoute.LICENSE_GATE) },
@@ -2031,10 +2213,11 @@ private fun DesktopShell(
                     BackupRestoreScreen(
                         defaultBackupPath = dataDir.resolve("backups/pos-backup.db"),
                         strings = strings,
-                        onBackupRequested = { target -> runCatching { state.db.backupTo(target) } },
-                        onRestoreRequested = { source -> runCatching { state.db.stageRestore(source) } },
+                        onBackupRequested = { target -> withContext(Dispatchers.IO) { runCatching { state.db.backupTo(target) } } },
+                        onRestoreRequested = { source -> withContext(Dispatchers.IO) { runCatching { state.db.stageRestore(source) } } },
                         onNavigateToEstablishment = { state.navigateTo(DesktopScreenRoute.SETTINGS) },
                         onNavigateToPrinters = { state.navigateTo(DesktopScreenRoute.PRINTER_SETTINGS) },
+                        onNavigateToCustomerDisplay = { state.navigateTo(DesktopScreenRoute.CUSTOMER_DISPLAY_SETTINGS) },
                         onNavigateToDataManagement = { state.navigateTo(DesktopScreenRoute.DATA_MANAGEMENT) },
                         onNavigateToLicense = { state.navigateTo(DesktopScreenRoute.LICENSE_GATE) },
                         onBack = { state.navigateTo(DesktopScreenRoute.DASHBOARD) }
@@ -2048,6 +2231,7 @@ private fun DesktopShell(
                         onFactoryResetComplete = { state.onFactoryResetCompleted() },
                         onNavigateToEstablishment = { state.navigateTo(DesktopScreenRoute.SETTINGS) },
                         onNavigateToPrinters = { state.navigateTo(DesktopScreenRoute.PRINTER_SETTINGS) },
+                        onNavigateToCustomerDisplay = { state.navigateTo(DesktopScreenRoute.CUSTOMER_DISPLAY_SETTINGS) },
                         onNavigateToBackupRestore = { state.navigateTo(DesktopScreenRoute.BACKUP_RESTORE) },
                         onNavigateToLicense = { state.navigateTo(DesktopScreenRoute.LICENSE_GATE) },
                         onBack = { state.navigateTo(DesktopScreenRoute.DASHBOARD) }
@@ -2062,6 +2246,7 @@ private fun DesktopShell(
                         canNavigateBack = true,
                         onNavigateToEstablishment = { state.navigateTo(DesktopScreenRoute.SETTINGS) },
                         onNavigateToPrinters = { state.navigateTo(DesktopScreenRoute.PRINTER_SETTINGS) },
+                        onNavigateToCustomerDisplay = { state.navigateTo(DesktopScreenRoute.CUSTOMER_DISPLAY_SETTINGS) },
                         onNavigateToBackupRestore = { state.navigateTo(DesktopScreenRoute.BACKUP_RESTORE) },
                         onNavigateToDataManagement = { state.navigateTo(DesktopScreenRoute.DATA_MANAGEMENT) },
                         onBack = { state.navigateTo(DesktopScreenRoute.DASHBOARD) }
@@ -2103,11 +2288,15 @@ private fun DesktopShell(
             confirmation = confirmation,
             strings = strings,
             onPrintReceipt = {
-                state.printAndFinishSale(confirmation)
+                try {
+                    withContext(Dispatchers.IO) { state.printAndFinishSale(confirmation).success }
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    state.showError(error.message ?: strings.text("Erreur d'impression", "Print error", "خطأ في الطباعة"))
+                    false
+                }
             },
-            onFinish = {
-                state.finishSaleWithoutPrinting()
-            }
+            onFinish = { withContext(Dispatchers.IO) { state.finishSaleWithoutPrinting() } }
         )
     }
 
@@ -2232,15 +2421,20 @@ private fun loadCompany(db: WindowsPosDatabase): ReceiptCompany = runBlocking {
 fun SaleCompletedDialog(
     confirmation: CompletedSaleConfirmation,
     strings: DesktopStrings,
-    onPrintReceipt: () -> Unit,
-    onFinish: () -> Unit
+    onPrintReceipt: suspend () -> Boolean,
+    onFinish: suspend () -> Unit
 ) {
     var isProcessing by remember { mutableStateOf(false) }
+    var printFailed by remember { mutableStateOf(false) }
+    val printScope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = {
             if (!isProcessing) {
                 isProcessing = true
-                onFinish()
+                printScope.launch {
+                    try { onFinish() }
+                    finally { isProcessing = false }
+                }
             }
         },
         icon = {
@@ -2364,7 +2558,10 @@ fun SaleCompletedDialog(
                 onClick = {
                     if (!isProcessing) {
                         isProcessing = true
-                        onPrintReceipt()
+                        printScope.launch {
+                            try { printFailed = !onPrintReceipt() }
+                            finally { isProcessing = false }
+                        }
                     }
                 },
                 enabled = !isProcessing,
@@ -2376,6 +2573,7 @@ fun SaleCompletedDialog(
             ) {
                 Text(
                     if (isProcessing) "⏳ " + strings.text("En cours...", "Processing...", "جاري المعالجة...")
+                    else if (printFailed) "🖨️ " + strings.text("Réessayer", "Retry printing", "إعادة المحاولة")
                     else "🖨️ " + strings.printReceipt,
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
@@ -2387,7 +2585,10 @@ fun SaleCompletedDialog(
                 onClick = {
                     if (!isProcessing) {
                         isProcessing = true
-                        onFinish()
+                        printScope.launch {
+                            try { onFinish() }
+                            finally { isProcessing = false }
+                        }
                     }
                 },
                 enabled = !isProcessing,
@@ -2399,7 +2600,7 @@ fun SaleCompletedDialog(
                     .pointerHoverIcon(PointerIcon.Hand)
             ) {
                 Text(
-                    "✓ " + strings.finishAction,
+                    "✓ " + strings.text("Terminer sans imprimer", "Finish without printing", "إنهاء دون طباعة"),
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )

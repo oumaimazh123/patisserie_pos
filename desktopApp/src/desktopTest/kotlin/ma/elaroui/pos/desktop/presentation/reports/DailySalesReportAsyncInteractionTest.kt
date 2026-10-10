@@ -46,7 +46,10 @@ class DailySalesReportAsyncInteractionTest {
         } finally {
             release.countDown()
         }
-        compose.waitForIdle()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(strings.totalRevenue, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithText(strings.totalRevenue, useUnmergedTree = true).assertExists()
     }
 }

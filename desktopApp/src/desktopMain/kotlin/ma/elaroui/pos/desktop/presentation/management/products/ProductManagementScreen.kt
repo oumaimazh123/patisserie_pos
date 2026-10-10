@@ -34,8 +34,13 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import java.text.Normalizer
 import java.nio.file.Files
 import ma.elaroui.pos.desktop.DesktopStrings
@@ -50,7 +55,9 @@ import ma.elaroui.pos.desktop.presentation.components.SafeProductImage
 import ma.elaroui.pos.desktop.presentation.components.TouchNumericField
 import ma.elaroui.pos.desktop.presentation.components.TouchTextField
 import ma.elaroui.pos.desktop.presentation.components.touchDragScroll
-import ma.elaroui.pos.desktop.presentation.components.touchHorizontalDragScroll
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import ma.elaroui.pos.desktop.presentation.components.VirtualKeyboardDialog
 import ma.elaroui.pos.shared.domain.Category
 import ma.elaroui.pos.shared.domain.Product
 import ma.elaroui.pos.shared.rules.CategoryHierarchyRules
@@ -897,6 +904,8 @@ private fun ProductCategoryDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var menuSearchQuery by remember { mutableStateOf("") }
+    var showVirtualKeyboard by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
     val interactionSource = remember { MutableInteractionSource() }
 
     var expandedCategoryIds by remember { mutableStateOf(emptySet<Long>()) }
@@ -999,9 +1008,12 @@ private fun ProductCategoryDropdown(
 
     val isFilterActive = selectedCategoryId != null
 
+    var triggerWidth by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
+
     Box(modifier = modifier) {
         Surface(
-            onClick = { expanded = true },
+            onClick = { expanded = !expanded },
             interactionSource = interactionSource,
             shape = RoundedCornerShape(10.dp),
             color = if (isFilterActive) PosColors.PrimaryLight.copy(alpha = 0.5f) else Color.White,
@@ -1009,6 +1021,7 @@ private fun ProductCategoryDropdown(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
+                .onGloballyPositioned { triggerWidth = it.size.width }
                 .pointerHoverIcon(PointerIcon.Hand)
         ) {
             Row(
@@ -1069,272 +1082,410 @@ private fun ProductCategoryDropdown(
             }
         }
 
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = {
-                expanded = false
-                menuSearchQuery = ""
-            },
-            modifier = Modifier
-                .background(Color.White)
-                .widthIn(min = 320.dp, max = 390.dp)
-                .heightIn(max = 440.dp)
-        ) {
-            // Search Input with BasicTextField - perfectly centered, never clipped!
-            Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = PosColors.Workspace,
-                    border = BorderStroke(1.dp, PosColors.Border),
-                    modifier = Modifier.fillMaxWidth().height(38.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("🔍", fontSize = 13.sp)
-                        BasicTextField(
-                            value = menuSearchQuery,
-                            onValueChange = { menuSearchQuery = it },
-                            singleLine = true,
-                            textStyle = TextStyle(
-                                fontSize = 13.sp,
-                                color = PosColors.TextHigh,
-                                fontWeight = FontWeight.Normal
-                            ),
-                            decorationBox = { innerTextField ->
-                                if (menuSearchQuery.isEmpty()) {
-                                    Text(
-                                        strings.text("Rechercher catégorie…", "Search category…", "بحث عن فئة…"),
-                                        fontSize = 12.sp,
-                                        color = PosColors.TextLow
-                                    )
-                                }
-                                innerTextField()
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (menuSearchQuery.isNotBlank()) {
-                            IconButton(
-                                onClick = { menuSearchQuery = "" },
-                                modifier = Modifier.size(22.dp).pointerHoverIcon(PointerIcon.Hand)
-                            ) {
-                                Text("✕", fontSize = 11.sp, color = PosColors.TextMuted, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
+        if (expanded) {
+            val popupWidth = remember(triggerWidth, density) {
+                if (triggerWidth > 0) with(density) { triggerWidth.toDp() } else 360.dp
+            }
+            val offsetYPx = remember(density) {
+                with(density) { 52.dp.roundToPx() }
             }
 
-            HorizontalDivider(color = PosColors.Border.copy(alpha = 0.5f))
+            LaunchedEffect(Unit) {
+                try {
+                    searchFocusRequester.requestFocus()
+                } catch (_: Exception) {}
+            }
 
-            // "Toutes les catégories" Header Item
-            if (menuSearchQuery.isBlank()) {
-                val isAllSelected = selectedCategoryId == null
-                val allInteraction = remember { MutableInteractionSource() }
-                val isAllHovered by allInteraction.collectIsHoveredAsState()
-
-                Surface(
-                    onClick = {
-                        onCategorySelected(null)
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(0, offsetYPx),
+                onDismissRequest = {
+                    if (!showVirtualKeyboard) {
                         expanded = false
                         menuSearchQuery = ""
-                    },
-                    interactionSource = allInteraction,
-                    color = when {
-                        isAllSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
-                        isAllHovered -> PosColors.Workspace
-                        else -> Color.Transparent
-                    },
-                    shape = RoundedCornerShape(8.dp),
-                    border = if (isAllSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.3f)) else null,
+                    }
+                },
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnClickOutside = !showVirtualKeyboard
+                )
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color.White,
+                    border = BorderStroke(1.dp, PosColors.Border),
+                    shadowElevation = 8.dp,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                        .height(38.dp)
-                        .pointerHoverIcon(PointerIcon.Hand)
+                        .width(popupWidth.coerceAtLeast(320.dp))
+                        .heightIn(max = 440.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("🏷️", fontSize = 13.sp)
-                            Text(
-                                text = strings.text("Toutes les catégories", "All categories", "جميع الفئات"),
-                                fontSize = 13.sp,
-                                fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                color = if (isAllSelected) PosColors.PrimaryDark else PosColors.TextHigh
-                            )
-                        }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            if (isAllSelected) {
-                                Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
-                            }
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        // 1. Search Input (Sticky at top)
+                        Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                             Surface(
+                                onClick = {
+                                    try {
+                                        searchFocusRequester.requestFocus()
+                                    } catch (_: Exception) {}
+                                },
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (isAllSelected) PosColors.Primary.copy(alpha = 0.2f) else PosColors.Workspace
+                                color = PosColors.Workspace,
+                                border = BorderStroke(1.dp, PosColors.Border),
+                                modifier = Modifier.fillMaxWidth().height(38.dp)
                             ) {
-                                Text(
-                                    text = "${products.size}",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (isAllSelected) PosColors.PrimaryDark else PosColors.TextMuted,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider(color = PosColors.Border.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 3.dp))
-            }
-
-            // Categories Hierarchy Tree
-            if (visibleTreeItems.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = strings.text("Aucune catégorie trouvée", "No category found", "لم يتم العثور على أي فئة"),
-                        fontSize = 12.sp,
-                        color = PosColors.TextMuted
-                    )
-                }
-            } else {
-                visibleTreeItems.forEach { item ->
-                    val isSelected = item.id == selectedCategoryId
-                    val itemInteraction = remember { MutableInteractionSource() }
-                    val isHovered by itemInteraction.collectIsHoveredAsState()
-
-                    val startPadding = when (item.level) {
-                        1 -> 8.dp
-                        2 -> 24.dp
-                        else -> 42.dp
-                    }
-
-                    Surface(
-                        onClick = {
-                            onCategorySelected(item.id)
-                            expanded = false
-                            menuSearchQuery = ""
-                        },
-                        interactionSource = itemInteraction,
-                        color = when {
-                            isSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
-                            isHovered -> PosColors.Workspace
-                            else -> Color.Transparent
-                        },
-                        shape = RoundedCornerShape(8.dp),
-                        border = if (isSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.35f)) else null,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 6.dp, vertical = 1.dp)
-                            .height(36.dp)
-                            .pointerHoverIcon(PointerIcon.Hand)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(start = startPadding, end = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.weight(1f, fill = false)
-                            ) {
-                                // Expand / Collapse chevron if has children
-                                if (item.hasChildren) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .clickable {
-                                                item.id?.let { toggleCategoryExpand(it) }
-                                            }
-                                            .pointerHoverIcon(PointerIcon.Hand),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = if (item.isExpanded) "▼" else "▶",
-                                            fontSize = 9.sp,
-                                            color = if (isSelected) PosColors.Primary else PosColors.TextMedium
-                                        )
-                                    }
-                                } else {
-                                    if (item.level > 1) {
-                                        Text(
-                                            text = "↳",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isSelected) PosColors.Primary else PosColors.BorderVariant
-                                        )
-                                    } else {
-                                        Spacer(modifier = Modifier.width(20.dp))
-                                    }
-                                }
-
-                                val icon = when (item.level) {
-                                    1 -> "📁"
-                                    2 -> "📂"
-                                    else -> "🏷️"
-                                }
-                                Text(icon, fontSize = 12.sp)
-
-                                Text(
-                                    text = item.name,
-                                    fontSize = if (item.level == 1) 13.sp else 12.sp,
-                                    fontWeight = when {
-                                        isSelected -> FontWeight.Bold
-                                        item.level == 1 -> FontWeight.Bold
-                                        item.level == 2 -> FontWeight.SemiBold
-                                        else -> FontWeight.Normal
-                                    },
-                                    color = when {
-                                        isSelected -> PosColors.PrimaryDark
-                                        item.level == 1 -> PosColors.TextHigh
-                                        else -> PosColors.TextMedium
-                                    },
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                if (isSelected) {
-                                    Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
-                                }
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (isSelected) PosColors.Primary.copy(alpha = 0.2f) else PosColors.Workspace
+                                Row(
+                                    modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Text(
-                                        text = "${item.productCount}",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (isSelected) PosColors.PrimaryDark else PosColors.TextMuted,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    Text("🔍", fontSize = 13.sp)
+                                    BasicTextField(
+                                        value = menuSearchQuery,
+                                        onValueChange = { menuSearchQuery = it },
+                                        singleLine = true,
+                                        textStyle = TextStyle(
+                                            fontSize = 13.sp,
+                                            color = PosColors.TextHigh,
+                                            fontWeight = FontWeight.Normal
+                                        ),
+                                        decorationBox = { innerTextField ->
+                                            if (menuSearchQuery.isEmpty()) {
+                                                Text(
+                                                    strings.text("Rechercher catégorie…", "Search category…", "بحث عن فئة…"),
+                                                    fontSize = 12.sp,
+                                                    color = PosColors.TextLow
+                                                )
+                                            }
+                                            innerTextField()
+                                        },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .focusRequester(searchFocusRequester)
                                     )
+                                    if (menuSearchQuery.isNotBlank()) {
+                                        IconButton(
+                                            onClick = { menuSearchQuery = "" },
+                                            modifier = Modifier.size(24.dp).pointerHoverIcon(PointerIcon.Hand)
+                                        ) {
+                                            Text("✕", fontSize = 11.sp, color = PosColors.TextMuted, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = { showVirtualKeyboard = true },
+                                        modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand)
+                                    ) {
+                                        Text("⌨️", fontSize = 14.sp)
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(color = PosColors.Border.copy(alpha = 0.5f))
+
+                        // 2. "Toutes les catégories" Header Item (Sticky if not searching)
+                        if (menuSearchQuery.isBlank()) {
+                            val isAllSelected = selectedCategoryId == null
+                            val allInteraction = remember { MutableInteractionSource() }
+                            val isAllHovered by allInteraction.collectIsHoveredAsState()
+
+                            Surface(
+                                onClick = {
+                                    onCategorySelected(null)
+                                    expanded = false
+                                    menuSearchQuery = ""
+                                },
+                                interactionSource = allInteraction,
+                                color = when {
+                                    isAllSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
+                                    isAllHovered -> PosColors.Workspace
+                                    else -> Color.Transparent
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                border = if (isAllSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.3f)) else null,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .height(38.dp)
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("🏷️", fontSize = 13.sp)
+                                        Text(
+                                            text = strings.text("Toutes les catégories", "All categories", "جميع الفئات"),
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                            color = if (isAllSelected) PosColors.PrimaryDark else PosColors.TextHigh
+                                        )
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        if (isAllSelected) {
+                                            Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (isAllSelected) PosColors.Primary.copy(alpha = 0.2f) else PosColors.Workspace
+                                        ) {
+                                            Text(
+                                                text = "${products.size}",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = if (isAllSelected) PosColors.PrimaryDark else PosColors.TextMuted,
+                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider(color = PosColors.Border.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 3.dp))
+                        }
+
+                        // 3. Categories Hierarchy Tree in LazyColumn with VerticalScrollbar
+                        val listState = rememberLazyListState()
+                        val coroutineScope = rememberCoroutineScope()
+
+                        LaunchedEffect(expanded) {
+                            if (expanded && selectedCategoryId != null) {
+                                val targetIndex = visibleTreeItems.indexOfFirst { it.id == selectedCategoryId }
+                                if (targetIndex >= 0) {
+                                    listState.scrollToItem(targetIndex)
+                                }
+                            }
+                        }
+
+                        if (visibleTreeItems.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = strings.text("Aucune catégorie trouvée", "No category found", "لم يتم العثور على أي فئة"),
+                                    fontSize = 12.sp,
+                                    color = PosColors.TextMuted
+                                )
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .fillMaxWidth()
+                            ) {
+                                LazyColumn(
+                                    state = listState,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .touchDragScroll(listState)
+                                        .padding(end = 12.dp)
+                                ) {
+                                    items(visibleTreeItems, key = { it.id ?: -1L }) { item ->
+                                        val isSelected = item.id == selectedCategoryId
+                                        val itemInteraction = remember { MutableInteractionSource() }
+                                        val isHovered by itemInteraction.collectIsHoveredAsState()
+
+                                        val startPadding = when (item.level) {
+                                            1 -> 8.dp
+                                            2 -> 24.dp
+                                            else -> 42.dp
+                                        }
+
+                                        Surface(
+                                            onClick = {
+                                                onCategorySelected(item.id)
+                                                expanded = false
+                                                menuSearchQuery = ""
+                                            },
+                                            interactionSource = itemInteraction,
+                                            color = when {
+                                                isSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
+                                                isHovered -> PosColors.Workspace
+                                                else -> Color.Transparent
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            border = if (isSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.35f)) else null,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 6.dp, vertical = 1.dp)
+                                                .height(36.dp)
+                                                .pointerHoverIcon(PointerIcon.Hand)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .padding(start = startPadding, end = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    modifier = Modifier.weight(1f, fill = false)
+                                                ) {
+                                                    if (item.hasChildren) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(20.dp)
+                                                                .clickable {
+                                                                    item.id?.let { toggleCategoryExpand(it) }
+                                                                }
+                                                                .pointerHoverIcon(PointerIcon.Hand),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(
+                                                                text = if (item.isExpanded) "▼" else "▶",
+                                                                fontSize = 9.sp,
+                                                                color = if (isSelected) PosColors.Primary else PosColors.TextMedium
+                                                            )
+                                                        }
+                                                    } else {
+                                                        if (item.level > 1) {
+                                                            Text(
+                                                                text = "↳",
+                                                                fontSize = 11.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = if (isSelected) PosColors.Primary else PosColors.BorderVariant
+                                                            )
+                                                        } else {
+                                                            Spacer(modifier = Modifier.width(20.dp))
+                                                        }
+                                                    }
+
+                                                    val icon = when (item.level) {
+                                                        1 -> "📁"
+                                                        2 -> "📂"
+                                                        else -> "🏷️"
+                                                    }
+                                                    Text(icon, fontSize = 12.sp)
+
+                                                    Text(
+                                                        text = item.name,
+                                                        fontSize = if (item.level == 1) 13.sp else 12.sp,
+                                                        fontWeight = when {
+                                                            isSelected -> FontWeight.Bold
+                                                            item.level == 1 -> FontWeight.Bold
+                                                            item.level == 2 -> FontWeight.SemiBold
+                                                            else -> FontWeight.Normal
+                                                        },
+                                                        color = when {
+                                                            isSelected -> PosColors.PrimaryDark
+                                                            item.level == 1 -> PosColors.TextHigh
+                                                            else -> PosColors.TextMedium
+                                                        },
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    if (isSelected) {
+                                                        Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
+                                                    }
+                                                    Surface(
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = if (isSelected) PosColors.Primary.copy(alpha = 0.2f) else PosColors.Workspace
+                                                    ) {
+                                                        Text(
+                                                            text = "${item.productCount}",
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = if (isSelected) PosColors.PrimaryDark else PosColors.TextMuted,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                VerticalScrollbar(
+                                    adapter = rememberScrollbarAdapter(listState),
+                                    modifier = Modifier
+                                        .align(Alignment.CenterEnd)
+                                        .fillMaxHeight()
+                                        .padding(vertical = 4.dp, horizontal = 2.dp),
+                                    style = defaultScrollbarStyle().copy(
+                                        unhoverColor = PosColors.BorderVariant,
+                                        hoverColor = PosColors.Primary,
+                                        thickness = 6.dp
+                                    )
+                                )
+                            }
+                        }
+
+                        // 4. Footer with category count and touch-friendly scroll navigation buttons
+                        if (visibleTreeItems.size > 5) {
+                            HorizontalDivider(color = PosColors.Border.copy(alpha = 0.5f))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(PosColors.Workspace)
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "${visibleTreeItems.size} " + strings.text("catégories", "categories", "فئات"),
+                                    fontSize = 11.sp,
+                                    color = PosColors.TextMuted,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    IconButton(
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                val firstVisible = listState.firstVisibleItemIndex
+                                                listState.animateScrollToItem(maxOf(0, firstVisible - 3))
+                                            }
+                                        },
+                                        modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand)
+                                    ) {
+                                        Text("▲", fontSize = 11.sp, color = PosColors.Primary, fontWeight = FontWeight.Bold)
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                val firstVisible = listState.firstVisibleItemIndex
+                                                listState.animateScrollToItem(minOf(visibleTreeItems.lastIndex, firstVisible + 3))
+                                            }
+                                        },
+                                        modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand)
+                                    ) {
+                                        Text("▼", fontSize = 11.sp, color = PosColors.Primary, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+
+        if (showVirtualKeyboard) {
+            VirtualKeyboardDialog(
+                title = strings.text("Rechercher catégorie", "Search category", "بحث عن فئة"),
+                initialValue = menuSearchQuery,
+                placeholder = strings.text("Rechercher catégorie…", "Search category…", "بحث عن فئة…"),
+                onDismiss = { showVirtualKeyboard = false },
+                onConfirm = { result ->
+                    menuSearchQuery = result
+                    showVirtualKeyboard = false
+                }
+            )
         }
     }
 }
@@ -1435,6 +1586,8 @@ private fun DialogCategoryDropdownSelector(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var menuSearchQuery by remember { mutableStateOf("") }
+    var showVirtualKeyboard by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
     val interactionSource = remember { MutableInteractionSource() }
 
     val activeCategories = remember(categories, selectedCategoryId) {
@@ -1549,9 +1702,12 @@ private fun DialogCategoryDropdownSelector(
         else -> PosColors.Border
     }
 
+    var triggerWidth by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
+
     Box(modifier = modifier.fillMaxWidth()) {
         Surface(
-            onClick = { expanded = true },
+            onClick = { expanded = !expanded },
             interactionSource = interactionSource,
             shape = RoundedCornerShape(10.dp),
             color = Color.White,
@@ -1559,6 +1715,7 @@ private fun DialogCategoryDropdownSelector(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
+                .onGloballyPositioned { triggerWidth = it.size.width }
                 .pointerHoverIcon(PointerIcon.Hand)
         ) {
             Row(
@@ -1592,236 +1749,377 @@ private fun DialogCategoryDropdownSelector(
             }
         }
 
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = {
-                expanded = false
-                menuSearchQuery = ""
-            },
-            modifier = Modifier
-                .background(Color.White)
-                .widthIn(min = 360.dp, max = 500.dp)
-                .heightIn(max = 420.dp)
-        ) {
-            // Search Input
-            Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = PosColors.Workspace,
-                    border = BorderStroke(1.dp, PosColors.Border),
-                    modifier = Modifier.fillMaxWidth().height(38.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("🔍", fontSize = 13.sp)
-                        BasicTextField(
-                            value = menuSearchQuery,
-                            onValueChange = { menuSearchQuery = it },
-                            singleLine = true,
-                            textStyle = TextStyle(
-                                fontSize = 13.sp,
-                                color = PosColors.TextHigh,
-                                fontWeight = FontWeight.Normal
-                            ),
-                            decorationBox = { innerTextField ->
-                                if (menuSearchQuery.isEmpty()) {
-                                    Text(
-                                        strings.text("Rechercher catégorie…", "Search category…", "بحث عن فئة…"),
-                                        fontSize = 12.sp,
-                                        color = PosColors.TextLow
-                                    )
-                                }
-                                innerTextField()
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (menuSearchQuery.isNotBlank()) {
-                            IconButton(
-                                onClick = { menuSearchQuery = "" },
-                                modifier = Modifier.size(22.dp).pointerHoverIcon(PointerIcon.Hand)
-                            ) {
-                                Text("✕", fontSize = 11.sp, color = PosColors.TextMuted, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
+        if (expanded) {
+            val popupWidth = remember(triggerWidth, density) {
+                if (triggerWidth > 0) with(density) { triggerWidth.toDp() } else 460.dp
+            }
+            val offsetYPx = remember(density) {
+                with(density) { 52.dp.roundToPx() }
             }
 
-            HorizontalDivider(color = PosColors.Border.copy(alpha = 0.5f))
+            LaunchedEffect(Unit) {
+                try {
+                    searchFocusRequester.requestFocus()
+                } catch (_: Exception) {}
+            }
 
-            // "Toutes les catégories" Option
-            if (menuSearchQuery.isBlank()) {
-                val isAllSelected = selectedCategoryId == null
-                val allInteraction = remember { MutableInteractionSource() }
-                val isAllHovered by allInteraction.collectIsHoveredAsState()
-
-                Surface(
-                    onClick = {
-                        onCategorySelected(null)
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(0, offsetYPx),
+                onDismissRequest = {
+                    if (!showVirtualKeyboard) {
                         expanded = false
                         menuSearchQuery = ""
-                    },
-                    interactionSource = allInteraction,
-                    color = when {
-                        isAllSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
-                        isAllHovered -> PosColors.Workspace
-                        else -> Color.Transparent
-                    },
-                    shape = RoundedCornerShape(8.dp),
-                    border = if (isAllSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.3f)) else null,
+                    }
+                },
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnClickOutside = !showVirtualKeyboard
+                )
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color.White,
+                    border = BorderStroke(1.dp, PosColors.Border),
+                    shadowElevation = 8.dp,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                        .height(38.dp)
-                        .pointerHoverIcon(PointerIcon.Hand)
+                        .width(popupWidth)
+                        .heightIn(max = 420.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("🏷️", fontSize = 13.sp)
-                            Text(
-                                text = strings.text("Sans catégorie (Aucune)", "No category (None)", "بدون فئة (لا يوجد)"),
-                                fontSize = 13.sp,
-                                fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                color = if (isAllSelected) PosColors.PrimaryDark else PosColors.TextHigh
-                            )
-                        }
-                        if (isAllSelected) {
-                            Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
-                        }
-                    }
-                }
-
-                HorizontalDivider(color = PosColors.Border.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 3.dp))
-            }
-
-            if (visibleTreeItems.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = strings.text("Aucune catégorie trouvée", "No category found", "لم يتم العثور على أي فئة"),
-                        fontSize = 12.sp,
-                        color = PosColors.TextMuted
-                    )
-                }
-            } else {
-                visibleTreeItems.forEach { item ->
-                    val isSelected = item.id == selectedCategoryId
-                    val itemInteraction = remember { MutableInteractionSource() }
-                    val isHovered by itemInteraction.collectIsHoveredAsState()
-
-                    val startPadding = when (item.level) {
-                        1 -> 8.dp
-                        2 -> 24.dp
-                        else -> 42.dp
-                    }
-
-                    Surface(
-                        onClick = {
-                            item.id?.let { onCategorySelected(it) }
-                            expanded = false
-                            menuSearchQuery = ""
-                        },
-                        interactionSource = itemInteraction,
-                        color = when {
-                            isSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
-                            isHovered -> PosColors.Workspace
-                            else -> Color.Transparent
-                        },
-                        shape = RoundedCornerShape(8.dp),
-                        border = if (isSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.35f)) else null,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 6.dp, vertical = 1.dp)
-                            .height(36.dp)
-                            .pointerHoverIcon(PointerIcon.Hand)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(start = startPadding, end = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.weight(1f, fill = false)
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        // 1. Fixed Search Bar (Sticky at top, never scrolls away)
+                        Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                            Surface(
+                                onClick = {
+                                    try {
+                                        searchFocusRequester.requestFocus()
+                                    } catch (_: Exception) {}
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = PosColors.Workspace,
+                                border = BorderStroke(1.dp, PosColors.Border),
+                                modifier = Modifier.fillMaxWidth().height(38.dp)
                             ) {
-                                if (item.hasChildren) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .clickable {
-                                                item.id?.let { toggleCategoryExpand(it) }
+                                Row(
+                                    modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("🔍", fontSize = 13.sp)
+                                    BasicTextField(
+                                        value = menuSearchQuery,
+                                        onValueChange = { menuSearchQuery = it },
+                                        singleLine = true,
+                                        textStyle = TextStyle(
+                                            fontSize = 13.sp,
+                                            color = PosColors.TextHigh,
+                                            fontWeight = FontWeight.Normal
+                                        ),
+                                        decorationBox = { innerTextField ->
+                                            if (menuSearchQuery.isEmpty()) {
+                                                Text(
+                                                    strings.text("Rechercher catégorie…", "Search category…", "بحث عن فئة…"),
+                                                    fontSize = 12.sp,
+                                                    color = PosColors.TextLow
+                                                )
                                             }
-                                            .pointerHoverIcon(PointerIcon.Hand),
-                                        contentAlignment = Alignment.Center
+                                            innerTextField()
+                                        },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .focusRequester(searchFocusRequester)
+                                    )
+                                    if (menuSearchQuery.isNotBlank()) {
+                                        IconButton(
+                                            onClick = { menuSearchQuery = "" },
+                                            modifier = Modifier.size(24.dp).pointerHoverIcon(PointerIcon.Hand)
+                                        ) {
+                                            Text("✕", fontSize = 11.sp, color = PosColors.TextMuted, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = { showVirtualKeyboard = true },
+                                        modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand)
                                     ) {
-                                        Text(
-                                            text = if (item.isExpanded) "▼" else "▶",
-                                            fontSize = 9.sp,
-                                            color = if (isSelected) PosColors.Primary else PosColors.TextMedium
-                                        )
-                                    }
-                                } else {
-                                    if (item.level > 1) {
-                                        Text(
-                                            text = "↳",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isSelected) PosColors.Primary else PosColors.BorderVariant
-                                        )
-                                    } else {
-                                        Spacer(modifier = Modifier.width(20.dp))
+                                        Text("⌨️", fontSize = 14.sp)
                                     }
                                 }
+                            }
+                        }
 
-                                val icon = when (item.level) {
-                                    1 -> "📁"
-                                    2 -> "📂"
-                                    else -> "🏷️"
+                        HorizontalDivider(color = PosColors.Border.copy(alpha = 0.5f))
+
+                        // 2. "Sans catégorie (Aucune)" Option (Sticky if not searching)
+                        if (menuSearchQuery.isBlank()) {
+                            val isAllSelected = selectedCategoryId == null
+                            val allInteraction = remember { MutableInteractionSource() }
+                            val isAllHovered by allInteraction.collectIsHoveredAsState()
+
+                            Surface(
+                                onClick = {
+                                    onCategorySelected(null)
+                                    expanded = false
+                                    menuSearchQuery = ""
+                                },
+                                interactionSource = allInteraction,
+                                color = when {
+                                    isAllSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
+                                    isAllHovered -> PosColors.Workspace
+                                    else -> Color.Transparent
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                border = if (isAllSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.3f)) else null,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .height(38.dp)
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("🏷️", fontSize = 13.sp)
+                                        Text(
+                                            text = strings.text("Sans catégorie (Aucune)", "No category (None)", "بدون فئة (لا يوجد)"),
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                            color = if (isAllSelected) PosColors.PrimaryDark else PosColors.TextHigh
+                                        )
+                                    }
+                                    if (isAllSelected) {
+                                        Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
+                                    }
                                 }
-                                Text(icon, fontSize = 12.sp)
+                            }
 
+                            HorizontalDivider(color = PosColors.Border.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 3.dp))
+                        }
+
+                        // 3. Scrollable Categories List with VerticalScrollbar and touchDragScroll
+                        val listState = rememberLazyListState()
+                        val coroutineScope = rememberCoroutineScope()
+
+                        // Auto-scroll to currently selected category upon opening
+                        LaunchedEffect(expanded) {
+                            if (expanded && selectedCategoryId != null) {
+                                val targetIndex = visibleTreeItems.indexOfFirst { it.id == selectedCategoryId }
+                                if (targetIndex >= 0) {
+                                    listState.scrollToItem(targetIndex)
+                                }
+                            }
+                        }
+
+                        if (visibleTreeItems.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
                                 Text(
-                                    text = item.name,
-                                    fontSize = if (item.level == 1) 13.sp else 12.sp,
-                                    fontWeight = when {
-                                        isSelected -> FontWeight.Bold
-                                        item.level == 1 -> FontWeight.Bold
-                                        item.level == 2 -> FontWeight.SemiBold
-                                        else -> FontWeight.Normal
-                                    },
-                                    color = when {
-                                        isSelected -> PosColors.PrimaryDark
-                                        item.level == 1 -> PosColors.TextHigh
-                                        else -> PosColors.TextMedium
-                                    },
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    text = strings.text("Aucune catégorie trouvée", "No category found", "لم يتم العثور على أي فئة"),
+                                    fontSize = 12.sp,
+                                    color = PosColors.TextMuted
                                 )
                             }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .fillMaxWidth()
+                            ) {
+                                LazyColumn(
+                                    state = listState,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .touchDragScroll(listState)
+                                        .padding(end = 12.dp)
+                                ) {
+                                    items(visibleTreeItems, key = { it.id ?: -1L }) { item ->
+                                        val isSelected = item.id == selectedCategoryId
+                                        val itemInteraction = remember { MutableInteractionSource() }
+                                        val isHovered by itemInteraction.collectIsHoveredAsState()
 
-                            if (isSelected) {
-                                Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
+                                        val startPadding = when (item.level) {
+                                            1 -> 8.dp
+                                            2 -> 24.dp
+                                            else -> 42.dp
+                                        }
+
+                                        Surface(
+                                            onClick = {
+                                                item.id?.let { onCategorySelected(it) }
+                                                expanded = false
+                                                menuSearchQuery = ""
+                                            },
+                                            interactionSource = itemInteraction,
+                                            color = when {
+                                                isSelected -> PosColors.PrimaryLight.copy(alpha = 0.5f)
+                                                isHovered -> PosColors.Workspace
+                                                else -> Color.Transparent
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            border = if (isSelected) BorderStroke(1.dp, PosColors.Primary.copy(alpha = 0.35f)) else null,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 6.dp, vertical = 1.dp)
+                                                .height(36.dp)
+                                                .pointerHoverIcon(PointerIcon.Hand)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .padding(start = startPadding, end = 10.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    modifier = Modifier.weight(1f, fill = false)
+                                                ) {
+                                                    if (item.hasChildren) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(20.dp)
+                                                                .clickable {
+                                                                    item.id?.let { toggleCategoryExpand(it) }
+                                                                }
+                                                                .pointerHoverIcon(PointerIcon.Hand),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(
+                                                                text = if (item.isExpanded) "▼" else "▶",
+                                                                fontSize = 9.sp,
+                                                                color = if (isSelected) PosColors.Primary else PosColors.TextMedium
+                                                            )
+                                                        }
+                                                    } else {
+                                                        if (item.level > 1) {
+                                                            Text(
+                                                                text = "↳",
+                                                                fontSize = 11.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = if (isSelected) PosColors.Primary else PosColors.BorderVariant
+                                                            )
+                                                        } else {
+                                                            Spacer(modifier = Modifier.width(20.dp))
+                                                        }
+                                                    }
+
+                                                    val icon = when (item.level) {
+                                                        1 -> "📁"
+                                                        2 -> "📂"
+                                                        else -> "🏷️"
+                                                    }
+                                                    Text(icon, fontSize = 12.sp)
+
+                                                    Text(
+                                                        text = item.name,
+                                                        fontSize = if (item.level == 1) 13.sp else 12.sp,
+                                                        fontWeight = when {
+                                                            isSelected -> FontWeight.Bold
+                                                            item.level == 1 -> FontWeight.Bold
+                                                            item.level == 2 -> FontWeight.SemiBold
+                                                            else -> FontWeight.Normal
+                                                        },
+                                                        color = when {
+                                                            isSelected -> PosColors.PrimaryDark
+                                                            item.level == 1 -> PosColors.TextHigh
+                                                            else -> PosColors.TextMedium
+                                                        },
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+
+                                                if (isSelected) {
+                                                    Text("✓", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PosColors.Primary)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                VerticalScrollbar(
+                                    adapter = rememberScrollbarAdapter(listState),
+                                    modifier = Modifier
+                                        .align(Alignment.CenterEnd)
+                                        .fillMaxHeight()
+                                        .padding(vertical = 4.dp, horizontal = 2.dp),
+                                    style = defaultScrollbarStyle().copy(
+                                        unhoverColor = PosColors.BorderVariant,
+                                        hoverColor = PosColors.Primary,
+                                        thickness = 6.dp
+                                    )
+                                )
+                            }
+                        }
+
+                        // 4. Footer with category count and touch-friendly scroll navigation buttons
+                        if (visibleTreeItems.size > 5) {
+                            HorizontalDivider(color = PosColors.Border.copy(alpha = 0.5f))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(PosColors.Workspace)
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "${visibleTreeItems.size} " + strings.text("catégories", "categories", "فئات"),
+                                    fontSize = 11.sp,
+                                    color = PosColors.TextMuted,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    IconButton(
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                val firstVisible = listState.firstVisibleItemIndex
+                                                listState.animateScrollToItem(maxOf(0, firstVisible - 3))
+                                            }
+                                        },
+                                        modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand)
+                                    ) {
+                                        Text("▲", fontSize = 11.sp, color = PosColors.Primary, fontWeight = FontWeight.Bold)
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                val firstVisible = listState.firstVisibleItemIndex
+                                                listState.animateScrollToItem(minOf(visibleTreeItems.lastIndex, firstVisible + 3))
+                                            }
+                                        },
+                                        modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand)
+                                    ) {
+                                        Text("▼", fontSize = 11.sp, color = PosColors.Primary, fontWeight = FontWeight.Bold)
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+
+        if (showVirtualKeyboard) {
+            VirtualKeyboardDialog(
+                title = strings.text("Rechercher catégorie", "Search category", "بحث عن فئة"),
+                initialValue = menuSearchQuery,
+                placeholder = strings.text("Rechercher catégorie…", "Search category…", "بحث عن فئة…"),
+                onDismiss = { showVirtualKeyboard = false },
+                onConfirm = { result ->
+                    menuSearchQuery = result
+                    showVirtualKeyboard = false
+                }
+            )
         }
     }
 }

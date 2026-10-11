@@ -459,6 +459,8 @@ class SaleConfirmationWorkflowTest {
             val prodId = db.products.save(Product(0, catId, "Éclair Café", 15_00L, 1000, active = true))
             state.refresh()
 
+            val initialNavKey = state.posNavigationKey
+
             // Flow 1: Complete sale and click "Imprimer le reçu"
             state.cart[prodId] = 1
             state.createOrder()
@@ -471,13 +473,17 @@ class SaleConfirmationWorkflowTest {
             assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
             assertNull(state.completedSaleConfirmation)
             assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category popup must auto-open after returning from sale via Imprimer le reçu")
+            assertTrue(state.posNavigationKey > initialNavKey, "posNavigationKey must increment to refresh POS UI state")
+            val navKeyAfterPrint = state.posNavigationKey
 
             // Flow 2: Subsequent normal navigation to another screen and back to POS retains auto-open
             state.navigateTo(DesktopScreenRoute.DASHBOARD)
             state.navigateTo(DesktopScreenRoute.POS_MAIN)
             assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category popup must auto-open on subsequent normal entry")
+            assertTrue(state.posNavigationKey > navKeyAfterPrint, "posNavigationKey must increment when re-entering POS_MAIN from dashboard")
+            val navKeyBeforeTerminer = state.posNavigationKey
 
-            // Flow 3: Complete sale and click "Terminer" (without printing)
+            // Flow 3: Complete sale and click "Terminer" (finishSaleWithoutPrinting)
             state.cart[prodId] = 1
             state.createOrder()
             assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
@@ -485,10 +491,11 @@ class SaleConfirmationWorkflowTest {
             assertEquals(DesktopScreenRoute.PAYMENT, state.currentRoute)
             assertNotNull(state.completedSaleConfirmation)
 
-            state.dismissCompletedSale()
+            state.finishSaleWithoutPrinting()
             assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
             assertNull(state.completedSaleConfirmation)
             assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category popup must auto-open after returning from sale via Terminer")
+            assertTrue(state.posNavigationKey > navKeyBeforeTerminer, "posNavigationKey must increment after Terminer to cleanly reset POS UI state")
         } finally {
             db.close()
         }

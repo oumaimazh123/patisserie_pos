@@ -321,6 +321,7 @@ class DesktopNavState(
     var completedSaleConfirmation by mutableStateOf<CompletedSaleConfirmation?>(null)
     var isPaymentProcessing by mutableStateOf(false)
     var autoOpenCategoryPickerOnPosMain by mutableStateOf(true)
+    var posNavigationKey by mutableLongStateOf(0L)
     var orderType by mutableStateOf(OrderType.COUNTER)
     var tableId by mutableStateOf<Long?>(null)
     var discountBasisPoints by mutableIntStateOf(0)
@@ -440,6 +441,9 @@ class DesktopNavState(
         clearMessage()
         if (route != DesktopScreenRoute.POS_MAIN) {
             autoOpenCategoryPickerOnPosMain = true
+        } else if (currentRoute != DesktopScreenRoute.POS_MAIN) {
+            autoOpenCategoryPickerOnPosMain = true
+            posNavigationKey++
         }
         if (isOwnerRoute(route) && currentUser?.role != UserRole.OWNER) {
             currentRoute = DesktopScreenRoute.POS_MAIN
@@ -836,6 +840,7 @@ class DesktopNavState(
         discountBasisPoints = 0
         customerDisplayController.showIdle()
         autoOpenCategoryPickerOnPosMain = true
+        posNavigationKey++
         currentRoute = DesktopScreenRoute.POS_MAIN
         refresh()
     }
@@ -1481,83 +1486,87 @@ private fun DesktopShell(
                     }
                 }
                 DesktopScreenRoute.POS_MAIN -> {
-                    POSMainScreen(
-                        products = state.checkoutProducts,
-                        categories = state.categories,
-                        popularCategoryIds = state.popularCategoryIds,
-                        categoryScores = state.categoryScores,
-                        productScores = state.productScores,
-                        cart = state.cart,
-                        discountBasisPoints = state.discountBasisPoints,
-                        itemDiscountsBasisPoints = state.itemDiscountsBasisPoints,
-                        isSavingOrder = isSavingOrder,
-                        strings = strings,
-                        autoOpenCategoryPicker = state.autoOpenCategoryPickerOnPosMain,
-                        onProductClicked = { p ->
-                            if (!isSavingOrder) {
-                                state.cart[p.id] = (state.cart[p.id] ?: 0) + 1
-                                state.syncCustomerDisplayCart()
-                            }
-                        },
-                        onQuantityChanged = { pid, q ->
-                            if (!isSavingOrder) {
-                                if (q <= 0) {
-                                    state.cart.remove(pid)
-                                    state.itemDiscountsBasisPoints.remove(pid)
-                                } else {
-                                    state.cart[pid] = q
+                    key(state.posNavigationKey) {
+                        POSMainScreen(
+                            products = state.checkoutProducts,
+                            categories = state.categories,
+                            popularCategoryIds = state.popularCategoryIds,
+                            categoryScores = state.categoryScores,
+                            productScores = state.productScores,
+                            cart = state.cart,
+                            discountBasisPoints = state.discountBasisPoints,
+                            itemDiscountsBasisPoints = state.itemDiscountsBasisPoints,
+                            isSavingOrder = isSavingOrder,
+                            strings = strings,
+                            autoOpenCategoryPicker = state.autoOpenCategoryPickerOnPosMain,
+                            posNavigationKey = state.posNavigationKey,
+                            onCategoryPickerDismissed = { state.autoOpenCategoryPickerOnPosMain = false },
+                            onProductClicked = { p ->
+                                if (!isSavingOrder) {
+                                    state.cart[p.id] = (state.cart[p.id] ?: 0) + 1
+                                    state.syncCustomerDisplayCart()
                                 }
-                                state.syncCustomerDisplayCart()
-                            }
-                        },
-                        onDiscountChanged = {
-                            if (!isSavingOrder) {
-                                state.discountBasisPoints = it.coerceIn(0, 10_000)
-                                state.syncCustomerDisplayCart()
-                            }
-                        },
-                        onItemDiscountChanged = { pid, bps ->
-                            if (!isSavingOrder) {
-                                if (bps <= 0) {
-                                    state.itemDiscountsBasisPoints.remove(pid)
-                                } else {
-                                    state.itemDiscountsBasisPoints[pid] = bps.coerceIn(0, 10_000)
+                            },
+                            onQuantityChanged = { pid, q ->
+                                if (!isSavingOrder) {
+                                    if (q <= 0) {
+                                        state.cart.remove(pid)
+                                        state.itemDiscountsBasisPoints.remove(pid)
+                                    } else {
+                                        state.cart[pid] = q
+                                    }
+                                    state.syncCustomerDisplayCart()
                                 }
-                                state.syncCustomerDisplayCart()
-                            }
-                        },
-                        onHoldOrder = {
-                            if (!isSavingOrder) {
-                                isSavingOrder = true
-                                operationScope.launch {
-                                    try { withContext(Dispatchers.IO) { state.holdOrder() } }
-                                    finally { isSavingOrder = false }
+                            },
+                            onDiscountChanged = {
+                                if (!isSavingOrder) {
+                                    state.discountBasisPoints = it.coerceIn(0, 10_000)
+                                    state.syncCustomerDisplayCart()
                                 }
-                            }
-                        },
-                        onProceedToPayment = {
-                            if (!isSavingOrder) {
-                                isSavingOrder = true
-                                operationScope.launch {
-                                    try { withContext(Dispatchers.IO) { state.createOrder() } }
-                                    finally { isSavingOrder = false }
+                            },
+                            onItemDiscountChanged = { pid, bps ->
+                                if (!isSavingOrder) {
+                                    if (bps <= 0) {
+                                        state.itemDiscountsBasisPoints.remove(pid)
+                                    } else {
+                                        state.itemDiscountsBasisPoints[pid] = bps.coerceIn(0, 10_000)
+                                    }
+                                    state.syncCustomerDisplayCart()
                                 }
-                            }
-                        },
-                        onClearCart = {
-                            if (!isSavingOrder) {
-                                state.cart.clear()
-                                state.itemDiscountsBasisPoints.clear()
-                                state.editingOrderId = null
-                                state.discountBasisPoints = 0
-                                state.syncCustomerDisplayCart()
-                            }
-                        },
-                        onBarcodeScanned = { barcode -> if (!isSavingOrder) state.onBarcodeScanned(barcode) },
-                        message = state.message,
-                        uiMessage = state.uiMessage,
-                        onClearMessage = { state.clearMessage() }
-                    )
+                            },
+                            onHoldOrder = {
+                                if (!isSavingOrder) {
+                                    isSavingOrder = true
+                                    operationScope.launch {
+                                        try { withContext(Dispatchers.IO) { state.holdOrder() } }
+                                        finally { isSavingOrder = false }
+                                    }
+                                }
+                            },
+                            onProceedToPayment = {
+                                if (!isSavingOrder) {
+                                    isSavingOrder = true
+                                    operationScope.launch {
+                                        try { withContext(Dispatchers.IO) { state.createOrder() } }
+                                        finally { isSavingOrder = false }
+                                    }
+                                }
+                            },
+                            onClearCart = {
+                                if (!isSavingOrder) {
+                                    state.cart.clear()
+                                    state.itemDiscountsBasisPoints.clear()
+                                    state.editingOrderId = null
+                                    state.discountBasisPoints = 0
+                                    state.syncCustomerDisplayCart()
+                                }
+                            },
+                            onBarcodeScanned = { barcode -> if (!isSavingOrder) state.onBarcodeScanned(barcode) },
+                            message = state.message,
+                            uiMessage = state.uiMessage,
+                            onClearMessage = { state.clearMessage() }
+                        )
+                    }
                 }
                 DesktopScreenRoute.ACTIVE_ORDERS -> {
                     ActiveOrdersScreen(

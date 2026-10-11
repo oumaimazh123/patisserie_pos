@@ -92,6 +92,8 @@ fun POSMainScreen(
     itemDiscountsBasisPoints: Map<Long, Int> = emptyMap(),
     strings: DesktopStrings,
     autoOpenCategoryPicker: Boolean = true,
+    posNavigationKey: Any? = null,
+    onCategoryPickerDismissed: (() -> Unit)? = null,
     onProductClicked: (Product) -> Unit,
     onQuantityChanged: (productId: Long, quantity: Int) -> Unit,
     onDiscountChanged: (basisPoints: Int) -> Unit,
@@ -105,11 +107,17 @@ fun POSMainScreen(
     uiMessage: UiMessage? = null,
     onClearMessage: () -> Unit = {}
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedCategoryId by remember { mutableStateOf<Long?>(null) }
-    var showCategoryPicker by remember { mutableStateOf(autoOpenCategoryPicker) }
-    var pickerInitialParentId by remember { mutableStateOf<Long?>(null) }
-    var showClearCartConfirmDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember(posNavigationKey) { mutableStateOf("") }
+    var selectedCategoryId by remember(posNavigationKey) { mutableStateOf<Long?>(null) }
+    var showCategoryPicker by remember(posNavigationKey) { mutableStateOf(autoOpenCategoryPicker) }
+    var pickerInitialParentId by remember(posNavigationKey) { mutableStateOf<Long?>(null) }
+    var showClearCartConfirmDialog by remember(posNavigationKey) { mutableStateOf(false) }
+
+    LaunchedEffect(posNavigationKey, autoOpenCategoryPicker) {
+        if (autoOpenCategoryPicker) {
+            showCategoryPicker = true
+        }
+    }
 
     val focusRequester = remember { FocusRequester() }
     val scannerController = remember(onBarcodeScanned) {
@@ -360,8 +368,12 @@ fun POSMainScreen(
                         onClearMessage()
                         selectedCategoryId = categoryId
                         showCategoryPicker = false
+                        onCategoryPickerDismissed?.invoke()
                     },
-                    onDismiss = { showCategoryPicker = false }
+                    onDismiss = {
+                        showCategoryPicker = false
+                        onCategoryPickerDismissed?.invoke()
+                    }
                 )
             }
 

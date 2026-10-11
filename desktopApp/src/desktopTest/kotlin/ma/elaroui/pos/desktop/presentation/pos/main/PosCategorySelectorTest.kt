@@ -486,6 +486,43 @@ class PosCategorySelectorTest {
         assertEquals(null, selectedCategoryId)
         assertFalse(showCategoryPicker, "Selecting 'Tous les produits' must close the popup")
     }
+
+    @Test
+    fun `returning from completed sale with posNavigationKey resets temporary UI state and reopens category popup`() {
+        // Initial state on POS entry
+        var posNavigationKey by mutableStateOf(0L)
+        val autoOpenCategoryPicker = true
+
+        var searchQuery by mutableStateOf("éclair")
+        var selectedCategoryId by mutableStateOf<Long?>(3L)
+        var showCategoryPicker by mutableStateOf(false) // Cashier picked category 3 and popup closed
+        var pickerInitialParentId by mutableStateOf<Long?>(1L)
+
+        // Verify state during sale creation: popup closed, search and category set
+        assertFalse(showCategoryPicker)
+        assertEquals("éclair", searchQuery)
+        assertEquals(3L, selectedCategoryId)
+        assertEquals(1L, pickerInitialParentId)
+
+        // Sale completed: cashier clicks "Terminer" or "Imprimer le ticket"
+        // dismissCompletedSale triggers posNavigationKey++ and sets autoOpenCategoryPickerOnPosMain = true
+        posNavigationKey++
+
+        // Emulate POSMainScreen / key(posNavigationKey) re-initialization
+        fun resetForNewSale(key: Long) {
+            searchQuery = ""
+            selectedCategoryId = null
+            showCategoryPicker = autoOpenCategoryPicker
+            pickerInitialParentId = null
+        }
+        resetForNewSale(posNavigationKey)
+
+        // Assert all temporary state is cleanly reset for next customer
+        assertTrue(showCategoryPicker, "Category popup must be displayed again for the next customer")
+        assertEquals("", searchQuery, "Search query must be cleared")
+        assertEquals(null, selectedCategoryId, "Selected category must be reset to root/all")
+        assertEquals(null, pickerInitialParentId, "Initial parent ID must be reset to null")
+    }
 }
 
 

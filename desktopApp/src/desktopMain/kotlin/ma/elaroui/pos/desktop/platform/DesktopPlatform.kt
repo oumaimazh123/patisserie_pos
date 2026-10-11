@@ -4,6 +4,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
+import java.sql.DriverManager
 import ma.elaroui.pos.shared.ApplicationDirectories
 import ma.elaroui.pos.shared.ApplicationDirectoriesProvider
 import ma.elaroui.pos.shared.PlatformPath
@@ -45,7 +46,14 @@ data class DesktopApplicationPaths(
     }
 
     fun migrateLegacyDataIfPresent() {
-        if (Files.exists(database) && Files.size(database) > 0L) {
+        val migrationLock = DesktopSingleInstanceLock.acquire(configuration.resolve("migration.lock"))
+            ?: error("Another process is migrating customer data")
+        migrationLock.use { migrateLegacyDataUnderLock() }
+    }
+
+    private fun migrateLegacyDataUnderLock() {
+        if (Files.exists(database)) {
+            require(Files.size(database) > 0L) { "Existing database is empty; refusing legacy migration" }
             return
         }
         val parentDir = root.parent ?: return
@@ -54,33 +62,101 @@ data class DesktopApplicationPaths(
             val candidateRoot = parentDir.resolve(legacy)
             val candidateDb = candidateRoot.resolve("data").resolve("pos.db")
             if (Files.exists(candidateDb) && Files.size(candidateDb) > 0L) {
-                runCatching {
+                val legacyLock = DesktopSingleInstanceLock.acquire(candidateRoot.resolve("config/application.lock"))
+                    ?: error("Legacy POS is still running; close it before migrating customer data")
+                legacyLock.use {
+                val sourceImages = candidateRoot.resolve("data").resolve("images")
+                val staging = database.resolveSibling("pos.db.legacy-${java.util.UUID.randomUUID()}.tmp")
+                try {
                     Files.createDirectories(database.parent)
-                    Files.copy(candidateDb, database, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                    val wal = candidateRoot.resolve("data").resolve("pos.db-wal")
-                    if (Files.exists(wal)) {
-                        Files.copy(wal, database.resolveSibling("pos.db-wal"), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    val escaped = staging.toAbsolutePath().toString().replace("'", "''")
+                    DriverManager.getConnection("jdbc:sqlite:${candidateDb.toAbsolutePath()}").use { source ->
+                        // A SQLite snapshot includes committed WAL transactions; a raw file copy does not.
+                        source.createStatement().use { it.execute("VACUUM INTO '$escaped'") }
                     }
-                    val shm = candidateRoot.resolve("data").resolve("pos.db-shm")
-                    if (Files.exists(shm)) {
-                        Files.copy(shm, database.resolveSibling("pos.db-shm"), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    DriverManager.getConnection("jdbc:sqlite:${staging.toAbsolutePath()}").use { snapshot ->
+                        val intact = snapshot.createStatement().use { statement ->
+                            statement.executeQuery("PRAGMA integrity_check").use { it.next() && it.getString(1) == "ok" }
+                        }
+                        check(intact) { "Legacy database snapshot failed integrity verification" }
+                        rewriteLegacyImagePaths(snapshot, sourceImages, images)
                     }
                     val candidateLicense = candidateRoot.resolve("data").resolve("secure").resolve("license.dat")
-                    if (Files.exists(candidateLicense) && (!Files.exists(licenseFile) || Files.size(licenseFile) == 0L)) {
+                    if (Files.exists(candidateLicense)) {
                         Files.createDirectories(licenseFile.parent)
-                        Files.copy(candidateLicense, licenseFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                        copyMissingOrIdentical(candidateLicense, licenseFile)
                     }
-                    val candidateImages = candidateRoot.resolve("data").resolve("images")
-                    if (Files.exists(candidateImages) && Files.isDirectory(candidateImages)) {
-                        copyDirectoryRecursively(candidateImages, images)
+                    if (Files.isDirectory(sourceImages)) {
+                        copyDirectoryRecursively(sourceImages, images)
                     }
                     val candidateBackups = candidateRoot.resolve("data").resolve("backups")
                     if (Files.exists(candidateBackups) && Files.isDirectory(candidateBackups)) {
                         copyDirectoryRecursively(candidateBackups, backups)
                     }
+                    try { Files.move(staging, database, StandardCopyOption.ATOMIC_MOVE) }
+                    catch (_: java.nio.file.AtomicMoveNotSupportedException) { Files.move(staging, database) }
+                } finally {
+                    Files.deleteIfExists(staging)
                 }
-                break
+                }
+                return
             }
+        }
+    }
+
+    private fun rewriteLegacyImagePaths(
+        snapshot: java.sql.Connection,
+        sourceImages: Path,
+        targetImages: Path
+    ) {
+        val sourcePrefix = sourceImages.toAbsolutePath().normalize().toString().replace('\\', '/') + "/"
+        for (table in listOf("products", "categories")) {
+            val hasTable = snapshot.createStatement().use { statement ->
+                statement.executeQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='$table'")
+                    .use { it.next() }
+            }
+            if (!hasTable) continue
+            val hasImagePath = snapshot.createStatement().use { statement ->
+                statement.executeQuery("PRAGMA table_info($table)").use { rows ->
+                    var found = false
+                    while (rows.next()) if (rows.getString("name") == "image_path") found = true
+                    found
+                }
+            }
+            if (!hasImagePath) continue
+            val updates = mutableListOf<Pair<Long, String>>()
+            snapshot.createStatement().use { statement ->
+                statement.executeQuery("SELECT id,image_path FROM $table WHERE image_path IS NOT NULL AND image_path<>''")
+                    .use { rows ->
+                        while (rows.next()) {
+                            val old = rows.getString(2).replace('\\', '/')
+                            if (old.startsWith(sourcePrefix, ignoreCase = true)) {
+                                val relative = old.substring(sourcePrefix.length)
+                                val target = targetImages.resolve(relative).normalize()
+                                check(target.startsWith(targetImages.normalize())) { "Unsafe legacy image path" }
+                                updates += rows.getLong(1) to target.toString()
+                            }
+                        }
+                    }
+            }
+            snapshot.prepareStatement("UPDATE $table SET image_path=? WHERE id=?").use { update ->
+                updates.forEach { (id, path) ->
+                    update.setString(1, path)
+                    update.setLong(2, id)
+                    update.addBatch()
+                }
+                update.executeBatch()
+            }
+        }
+    }
+
+    private fun copyMissingOrIdentical(source: Path, target: Path) {
+        if (Files.exists(target)) {
+            check(Files.isRegularFile(target) && Files.mismatch(source, target) == -1L) {
+                "Existing customer file differs from legacy source: $target"
+            }
+        } else {
+            Files.copy(source, target)
         }
     }
 
@@ -94,7 +170,7 @@ data class DesktopApplicationPaths(
                     Files.createDirectories(targetPath)
                 } else {
                     Files.createDirectories(targetPath.parent)
-                    Files.copy(sourcePath, targetPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    copyMissingOrIdentical(sourcePath, targetPath)
                 }
             }
         }

@@ -59,6 +59,11 @@ compose.desktop {
             windows {
                 iconFile.set(project.file("src/desktopMain/resources/pos_app_icon.ico"))
                 perUserInstall = true
+                // Keep installer-owned binaries outside the existing customer data tree at
+                // %LOCALAPPDATA%\PATISSERIE_POS\data. The pre-1.2.7 MSI used that tree as
+                // INSTALLDIR and recursively removed it during uninstall/major upgrade.
+                installationPath = "PATISSERIE_POS_APP"
+                dirChooser = false
                 menuGroup = "PATISSERIE_POS"
                 upgradeUuid = "46788696-3912-4d20-9f7d-220b62935d31"
             }
@@ -74,6 +79,4 @@ compose.desktop {
         }
     }
 }
-
-
 

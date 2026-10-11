@@ -405,7 +405,7 @@ class SaleConfirmationWorkflowTest {
             // 3. User navigates to POS_MAIN, and confirmation popup is clean/null
             assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
             assertNull(state.completedSaleConfirmation)
-            assertFalse(state.autoOpenCategoryPickerOnPosMain, "Category popup must NOT auto-open after returning from completed sale")
+            assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category popup must auto-open normally after returning to POS from completed sale")
         } finally {
             db.close()
         }
@@ -448,7 +448,7 @@ class SaleConfirmationWorkflowTest {
     }
 
     @Test
-    fun test10_categoriesPopup_doesNotOpenAutomaticallyAfterReturningFromCompletedSale(): Unit = runBlocking {
+    fun test10_categoriesPopup_opensAutomaticallyAfterReturningFromCompletedSale(): Unit = runBlocking {
         val (db, state, printer) = setupNavEnvironment()
         try {
             val owner = db.allUsers().first()
@@ -470,9 +470,9 @@ class SaleConfirmationWorkflowTest {
             state.printAndFinishSale(conf1)
             assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
             assertNull(state.completedSaleConfirmation)
-            assertFalse(state.autoOpenCategoryPickerOnPosMain, "Category popup must NOT auto-open after returning from sale via Imprimer le reçu")
+            assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category popup must auto-open after returning from sale via Imprimer le reçu")
 
-            // Flow 2: Subsequent normal navigation to another screen and back to POS restores auto-open
+            // Flow 2: Subsequent normal navigation to another screen and back to POS retains auto-open
             state.navigateTo(DesktopScreenRoute.DASHBOARD)
             state.navigateTo(DesktopScreenRoute.POS_MAIN)
             assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category popup must auto-open on subsequent normal entry")
@@ -488,7 +488,7 @@ class SaleConfirmationWorkflowTest {
             state.dismissCompletedSale()
             assertEquals(DesktopScreenRoute.POS_MAIN, state.currentRoute)
             assertNull(state.completedSaleConfirmation)
-            assertFalse(state.autoOpenCategoryPickerOnPosMain, "Category popup must NOT auto-open after returning from sale via Terminer")
+            assertTrue(state.autoOpenCategoryPickerOnPosMain, "Category popup must auto-open after returning from sale via Terminer")
         } finally {
             db.close()
         }

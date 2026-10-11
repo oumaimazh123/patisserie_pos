@@ -100,36 +100,50 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
             path.parent?.let(Files::createDirectories)
             Class.forName("org.sqlite.JDBC")
             applyPendingRestore(path)
-            createPreUpdateSafetyBackup(path)
+            createPreMigrationSafetyBackup(path)
             return WindowsPosDatabase(DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}"), path)
         }
 
-        private fun createPreUpdateSafetyBackup(live: Path) {
-            runCatching {
-                if (Files.exists(live) && Files.size(live) > 0L) {
-                    val backupsDir = live.parent.resolve("backups")
-                    Files.createDirectories(backupsDir)
-                    val dateTag = java.time.LocalDateTime.now()
-                        .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-                    val backupFile = backupsDir.resolve("auto_pre_update_$dateTag.db")
-                    // Include committed WAL pages in the safety snapshot after an unclean shutdown.
-                    val escaped = backupFile.toAbsolutePath().toString().replace("'", "''")
-                    if (!Files.exists(backupFile)) {
-                        DriverManager.getConnection("jdbc:sqlite:${live.toAbsolutePath()}").use { db ->
-                            db.createStatement().use { it.execute("VACUUM INTO '$escaped'") }
-                        }
-                    }
+        private const val CURRENT_SCHEMA_VERSION = 12
 
-                    // Retain only latest 10 auto_pre_update backups to avoid disk growth
-                    Files.list(backupsDir).use { stream ->
-                        val autoBackups = stream
-                            .filter { it.fileName.toString().startsWith("auto_pre_update_") }
-                            .sorted { p1, p2 -> Files.getLastModifiedTime(p2).compareTo(Files.getLastModifiedTime(p1)) }
-                            .toList()
-                        if (autoBackups.size > 10) {
-                            autoBackups.drop(10).forEach { runCatching { Files.deleteIfExists(it) } }
-                        }
+        private fun createPreMigrationSafetyBackup(live: Path) {
+            if (!Files.exists(live)) return
+            require(Files.size(live) > 0L) { "Existing database is empty; refusing to replace it" }
+            DriverManager.getConnection("jdbc:sqlite:${live.toAbsolutePath()}").use { db ->
+                val hasLedger = db.createStatement().use { statement ->
+                    statement.executeQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
+                        .use { it.next() }
+                }
+                val appliedVersions = if (hasLedger) db.createStatement().use { statement ->
+                    statement.executeQuery("SELECT version FROM schema_migrations").use { rows ->
+                        buildSet { while (rows.next()) add(rows.getInt(1)) }
                     }
+                } else emptySet()
+                require(appliedVersions.none { it > CURRENT_SCHEMA_VERSION }) {
+                    "Database schema is newer than this application"
+                }
+                if ((1..CURRENT_SCHEMA_VERSION).all { it in appliedVersions }) return
+
+                val backupsDir = live.parent.resolve("backups")
+                Files.createDirectories(backupsDir)
+                val dateTag = java.time.LocalDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+                val backupFile = backupsDir.resolve("auto_pre_update_${dateTag}_${java.util.UUID.randomUUID()}.db")
+                val escaped = backupFile.toAbsolutePath().toString().replace("'", "''")
+                var verified = false
+                try {
+                    // VACUUM INTO includes committed WAL pages; copying pos.db alone does not.
+                    db.createStatement().use { it.execute("VACUUM INTO '$escaped'") }
+                    check(Files.isRegularFile(backupFile) && Files.size(backupFile) > 0L)
+                    DriverManager.getConnection("jdbc:sqlite:${backupFile.toAbsolutePath()}").use { snapshot ->
+                        val intact = snapshot.createStatement().use { statement ->
+                            statement.executeQuery("PRAGMA integrity_check").use { it.next() && it.getString(1) == "ok" }
+                        }
+                        check(intact) { "Pre-migration backup failed integrity verification" }
+                    }
+                    verified = true
+                } finally {
+                    if (!verified) Files.deleteIfExists(backupFile)
                 }
             }
         }

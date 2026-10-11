@@ -835,7 +835,7 @@ class DesktopNavState(
         itemDiscountsBasisPoints.clear()
         discountBasisPoints = 0
         customerDisplayController.showIdle()
-        autoOpenCategoryPickerOnPosMain = false
+        autoOpenCategoryPickerOnPosMain = true
         currentRoute = DesktopScreenRoute.POS_MAIN
         refresh()
     }

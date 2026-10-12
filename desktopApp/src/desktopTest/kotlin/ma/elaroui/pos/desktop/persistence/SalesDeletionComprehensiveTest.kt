@@ -433,4 +433,208 @@ class SalesDeletionComprehensiveTest {
             tempDir.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun testDeleteSalesHistoryDeletesClosedSessionsAndEmptiesOpenSession(): Unit = runBlocking {
+        WindowsPosDatabase.openInMemory().use { db ->
+            val (_, p1, _) = setupTestEnvironment(db)
+            val owner = db.allUsers().first { it.role == UserRole.OWNER }
+
+            // 1. Create a closed session with a completed sale
+            val closedSessionId = db.sessions.save(RegisterSession(
+                id = 0L,
+                status = RegisterSessionStatus.CLOSED,
+                openingCashCentimes = 20000L,
+                registerId = 1L,
+                cashierId = owner.id,
+                openedAtEpochMilliseconds = System.currentTimeMillis() - 3600000,
+                closedAtEpochMilliseconds = System.currentTimeMillis() - 1800000,
+                expectedCashCentimes = 35000L,
+                countedCashCentimes = 35000L,
+                differenceCentimes = 0L
+            ))
+            val oClosed = db.orders.save(Order(0L, "CLOSED-01", OrderType.COUNTER, OrderStatus.COMPLETED, listOf(OrderLine(p1, "Espresso", 1500L, 1, 1000)), 1500L, 0L, 150L, 1500L, null, closedSessionId, owner.id))
+            db.payments.save(Payment(0L, oClosed, closedSessionId, PaymentMethod.CASH, 1500L, 1500L, 0L, PaymentStatus.COMPLETED, "tok-closed", System.currentTimeMillis()))
+            db.cashMovements.save(CashMovement(0L, closedSessionId, CashMovementType.CASH_IN, 5000L, "Fond fermé", null, owner.id, System.currentTimeMillis()))
+
+            // 2. Create an open session with a completed sale
+            val openSessionId = createSession(db, owner.id)
+            val oOpen = db.orders.save(Order(0L, "OPEN-01", OrderType.COUNTER, OrderStatus.COMPLETED, listOf(OrderLine(p1, "Espresso", 1500L, 1, 1000)), 1500L, 0L, 150L, 1500L, null, openSessionId, owner.id))
+            db.payments.save(Payment(0L, oOpen, openSessionId, PaymentMethod.CASH, 1500L, 1500L, 0L, PaymentStatus.COMPLETED, "tok-open", System.currentTimeMillis()))
+
+            // Check initial state
+            assertEquals(2, db.sessionHistory().size)
+
+            // Act: delete sales history
+            val deleted = db.deleteSalesHistory()
+            assertEquals(2, deleted)
+
+            // Assert:
+            // 1. Closed session is completely deleted
+            assertNull(db.sessions.findById(closedSessionId))
+            assertEquals(0, db.queryInt("SELECT count(*) FROM cash_movements WHERE session_id = $closedSessionId"))
+
+            // 2. Open session is preserved
+            val openSession = db.sessions.findById(openSessionId)
+            assertNotNull(openSession)
+            assertEquals(RegisterSessionStatus.OPEN, openSession.status)
+
+            // 3. Open session metrics evaluate to 0
+            val sessionRows = db.sessionHistory()
+            assertEquals(1, sessionRows.size)
+            val row = sessionRows.first()
+            assertEquals(openSessionId, row.session.id)
+            assertEquals(0L, row.cashSalesCentimes)
+            assertEquals(0L, row.cardSalesCentimes)
+            assertEquals(0L, row.totalSalesCentimes)
+        }
+    }
+
+    // 12. Test selective deletion of sales history cleans closed sessions and keeps catalog
+    @Test
+    fun testDeleteSelectiveSalesHistoryDeletesClosedSessionsAndPreservesCatalogue(): Unit = runBlocking {
+        WindowsPosDatabase.openInMemory().use { db ->
+            val (catId, p1, p2) = setupTestEnvironment(db)
+            val owner = db.allUsers().first { it.role == UserRole.OWNER }
+
+            val closedSession = db.sessions.save(RegisterSession(
+                id = 0L,
+                status = RegisterSessionStatus.CLOSED,
+                openingCashCentimes = 15000L,
+                registerId = 1L,
+                cashierId = owner.id,
+                openedAtEpochMilliseconds = System.currentTimeMillis() - 7200000,
+                closedAtEpochMilliseconds = System.currentTimeMillis() - 3600000,
+                expectedCashCentimes = 25000L,
+                countedCashCentimes = 25000L,
+                differenceCentimes = 0L
+            ))
+            val o1 = db.orders.save(Order(0L, "SEL-01", OrderType.COUNTER, OrderStatus.COMPLETED, listOf(OrderLine(p1, "Espresso", 1500L, 1, 1000)), 1500L, 0L, 150L, 1500L, null, closedSession, owner.id))
+            db.payments.save(Payment(0L, o1, closedSession, PaymentMethod.CASH, 1500L, 1500L, 0L, PaymentStatus.COMPLETED, "tok-sel", System.currentTimeMillis()))
+
+            val openSession = createSession(db, owner.id)
+            val catCountBefore = db.queryInt("SELECT count(*) FROM categories WHERE deleted_at IS NULL")
+            val prodCountBefore = db.queryInt("SELECT count(*) FROM products WHERE deleted_at IS NULL")
+
+            // Selective delete with only salesHistory = true
+            val summary = db.deleteSelective(DataGroupSelection(salesHistory = true))
+            assertEquals(1, summary.salesHistoryDeleted)
+
+            // Closed session gone
+            assertNull(db.sessions.findById(closedSession))
+
+            // Open session preserved
+            assertNotNull(db.sessions.findById(openSession))
+
+            // Catalog preserved
+            assertEquals(catCountBefore, db.queryInt("SELECT count(*) FROM categories WHERE deleted_at IS NULL"))
+            assertEquals(prodCountBefore, db.queryInt("SELECT count(*) FROM products WHERE deleted_at IS NULL"))
+        }
+    }
+
+    // 13. Test multiple cashiers and multiple closed sessions are all purged cleanly
+    @Test
+    fun testMultipleCashiersAndMultipleClosedSessionsPurgedCleanly(): Unit = runBlocking {
+        WindowsPosDatabase.openInMemory().use { db ->
+            val (_, p1, _) = setupTestEnvironment(db)
+            val owner = db.allUsers().first { it.role == UserRole.OWNER }
+            val cashier2 = db.createCashier("Amina Cashier", "9876")
+
+            // Session 1: closed by owner
+            val s1 = db.sessions.save(RegisterSession(0L, RegisterSessionStatus.CLOSED, 10000L, 1L, owner.id, 1000L, 2000L, 15000L, 15000L, 0L))
+            val o1 = db.orders.save(Order(0L, "S1-O1", OrderType.COUNTER, OrderStatus.COMPLETED, listOf(OrderLine(p1, "Espresso", 1500L, 1, 1000)), 1500L, 0L, 150L, 1500L, null, s1, owner.id))
+            db.payments.save(Payment(0L, o1, s1, PaymentMethod.CASH, 1500L, 1500L, 0L, PaymentStatus.COMPLETED, "p1", 1500L))
+
+            // Session 2: closed by cashier2
+            val s2 = db.sessions.save(RegisterSession(0L, RegisterSessionStatus.CLOSED, 10000L, 1L, cashier2, 3000L, 4000L, 15000L, 15000L, 0L))
+            val o2 = db.orders.save(Order(0L, "S2-O1", OrderType.COUNTER, OrderStatus.COMPLETED, listOf(OrderLine(p1, "Espresso", 1500L, 1, 1000)), 1500L, 0L, 150L, 1500L, null, s2, cashier2))
+            db.payments.save(Payment(0L, o2, s2, PaymentMethod.CARD, 1500L, 1500L, 0L, PaymentStatus.COMPLETED, "p2", 3500L))
+
+            // Session 3: currently open by cashier2
+            val s3 = createSession(db, cashier2)
+
+            assertEquals(3, db.sessionHistory().size)
+
+            val count = db.deleteSalesHistory()
+            assertEquals(2, count)
+
+            // Both closed sessions deleted
+            assertNull(db.sessions.findById(s1))
+            assertNull(db.sessions.findById(s2))
+
+            // Open session 3 remains
+            assertNotNull(db.sessions.findById(s3))
+            assertEquals(1, db.sessionHistory().size)
+
+            // Cashiers still exist and active
+            val cashiers = db.allUsers().filter { it.role == UserRole.CASHIER }
+            assertEquals(1, cashiers.size)
+            assertTrue(cashiers.first().active)
+        }
+    }
+
+    // 14. Test deletion when only closed sessions exist and no active open session
+    @Test
+    fun testDeletionWhenOnlyClosedSessionsExistAndNoOpenSession(): Unit = runBlocking {
+        WindowsPosDatabase.openInMemory().use { db ->
+            val (_, p1, _) = setupTestEnvironment(db)
+            val owner = db.allUsers().first { it.role == UserRole.OWNER }
+
+            // 2 closed sessions
+            val s1 = db.sessions.save(RegisterSession(0L, RegisterSessionStatus.CLOSED, 10000L, 1L, owner.id, 1000L, 2000L, 10000L, 10000L, 0L))
+            val s2 = db.sessions.save(RegisterSession(0L, RegisterSessionStatus.CLOSED, 10000L, 1L, owner.id, 3000L, 4000L, 10000L, 10000L, 0L))
+
+            val o1 = db.orders.save(Order(0L, "O1", OrderType.COUNTER, OrderStatus.COMPLETED, listOf(OrderLine(p1, "Espresso", 1500L, 1, 1000)), 1500L, 0L, 150L, 1500L, null, s1, owner.id))
+            db.payments.save(Payment(0L, o1, s1, PaymentMethod.CASH, 1500L, 1500L, 0L, PaymentStatus.COMPLETED, "p1", 1500L))
+
+            assertEquals(2, db.sessionHistory().size)
+            assertNull(db.sessions.findOpen())
+
+            db.deleteSalesHistory()
+
+            // All sessions gone
+            assertTrue(db.sessionHistory().isEmpty())
+            assertNull(db.sessions.findOpen())
+
+            // Opening a new session afterwards works seamlessly
+            val newSession = createSession(db, owner.id)
+            assertNotNull(db.sessions.findById(newSession))
+            assertEquals(1, db.sessionHistory().size)
+        }
+    }
+
+    // 15. Test open session preserves pending orders while completed sales are deleted
+    @Test
+    fun testOpenSessionPreservesPendingOrderWhileCompletedSalesAreCleared(): Unit = runBlocking {
+        WindowsPosDatabase.openInMemory().use { db ->
+            val (_, p1, p2) = setupTestEnvironment(db)
+            val owner = db.allUsers().first { it.role == UserRole.OWNER }
+
+            val openSession = createSession(db, owner.id)
+
+            // Completed sale
+            val compOrder = db.orders.save(Order(0L, "COMP-01", OrderType.COUNTER, OrderStatus.COMPLETED, listOf(OrderLine(p1, "Espresso", 1500L, 1, 1000)), 1500L, 0L, 150L, 1500L, null, openSession, owner.id))
+            db.payments.save(Payment(0L, compOrder, openSession, PaymentMethod.CASH, 1500L, 1500L, 0L, PaymentStatus.COMPLETED, "pay-comp", System.currentTimeMillis()))
+
+            // Open order (e.g. pending / in cart)
+            val openOrder = db.orders.save(Order(0L, "OPEN-01", OrderType.COUNTER, OrderStatus.OPEN, listOf(OrderLine(p2, "Croissant", 2000L, 1, 1000)), 2000L, 0L, 200L, 2000L, null, openSession, owner.id))
+
+            assertEquals(2, db.salesHistory().size)
+
+            db.deleteSalesHistory()
+
+            // Completed sale is deleted
+            assertTrue(db.salesHistory(status = OrderStatus.COMPLETED).isEmpty())
+
+            // Open order remains
+            val remainingOpen = db.orderHistory(OrderStatus.OPEN)
+            assertEquals(1, remainingOpen.size)
+            assertEquals(openOrder, remainingOpen.first().id)
+
+            // Open session remains with 0 completed sales
+            val sessionRow = db.sessionHistory().first()
+            assertEquals(openSession, sessionRow.session.id)
+            assertEquals(0L, sessionRow.totalSalesCentimes)
+        }
+    }
 }

@@ -1770,12 +1770,17 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
 
     fun deleteSalesHistory(actingUserId: Long = 1L): Int = read { c ->
         transactionBlocking {
+            var count = 0
             c.createStatement().use { s ->
                 s.executeUpdate("DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE status IN ('COMPLETED', 'CANCELLED') OR status != 'OPEN')")
                 s.executeUpdate("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE status IN ('COMPLETED', 'CANCELLED') OR status != 'OPEN')")
+                count = s.executeUpdate("DELETE FROM orders WHERE status IN ('COMPLETED', 'CANCELLED') OR status != 'OPEN'")
+                s.executeUpdate("DELETE FROM cash_movements WHERE session_id IN (SELECT id FROM register_sessions WHERE status = 'CLOSED')")
+                s.executeUpdate("DELETE FROM payments WHERE session_id IN (SELECT id FROM register_sessions WHERE status = 'CLOSED')")
+                s.executeUpdate("DELETE FROM register_sessions WHERE status = 'CLOSED'")
+                s.executeUpdate("UPDATE register_sessions SET expected_cash_centimes = NULL, counted_cash_centimes = NULL, difference_centimes = NULL WHERE status = 'OPEN'")
             }
-            val count = c.createStatement().use { it.executeUpdate("DELETE FROM orders WHERE status IN ('COMPLETED', 'CANCELLED') OR status != 'OPEN'") }
-            logDeletionAudit(c, actingUserId, "SALES_HISTORY", count, "Suppression de l'historique des ventes ($count ventes clôturées/annulées)")
+            logDeletionAudit(c, actingUserId, "SALES_HISTORY", count, "Suppression de l'historique des ventes ($count ventes clôturées/annulées et purge des sessions fermées)")
             count
         }
     }
@@ -1908,8 +1913,12 @@ class WindowsPosDatabase private constructor(private val connection: Connection,
                 c.createStatement().use { s ->
                     s.executeUpdate("DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE status IN ('COMPLETED', 'CANCELLED'))")
                     s.executeUpdate("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE status IN ('COMPLETED', 'CANCELLED'))")
+                    salesDeleted = s.executeUpdate("DELETE FROM orders WHERE status IN ('COMPLETED', 'CANCELLED')")
+                    s.executeUpdate("DELETE FROM cash_movements WHERE session_id IN (SELECT id FROM register_sessions WHERE status = 'CLOSED')")
+                    s.executeUpdate("DELETE FROM payments WHERE session_id IN (SELECT id FROM register_sessions WHERE status = 'CLOSED')")
+                    s.executeUpdate("DELETE FROM register_sessions WHERE status = 'CLOSED'")
+                    s.executeUpdate("UPDATE register_sessions SET expected_cash_centimes = NULL, counted_cash_centimes = NULL, difference_centimes = NULL WHERE status = 'OPEN'")
                 }
-                salesDeleted = c.createStatement().use { it.executeUpdate("DELETE FROM orders WHERE status IN ('COMPLETED', 'CANCELLED')") }
             }
 
             // 3. Catalogue

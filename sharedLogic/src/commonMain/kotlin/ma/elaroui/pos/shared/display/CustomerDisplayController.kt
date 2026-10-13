@@ -106,9 +106,9 @@ class CustomerDisplayController(
         transitionTo(next)
     }
 
-    fun updateCart(totalCentimes: Long) {
+    fun updateCart(subtotalCentimes: Long, dueCentimes: Long) {
         cancelPendingJobs()
-        if (totalCentimes <= 0L) {
+        if (subtotalCentimes <= 0L && dueCentimes <= 0L) {
             val next = CustomerDisplayState.Idle(
                 line1 = _config.value.welcomeLine1,
                 line2 = _config.value.welcomeLine2
@@ -117,10 +117,14 @@ class CustomerDisplayController(
             return
         }
         val next = CustomerDisplayState.DuringSale(
-            totalCentimes = totalCentimes,
-            dueCentimes = totalCentimes
+            totalCentimes = subtotalCentimes,
+            dueCentimes = dueCentimes
         )
         transitionTo(next)
+    }
+
+    fun updateCart(totalCentimes: Long) {
+        updateCart(subtotalCentimes = totalCentimes, dueCentimes = totalCentimes)
     }
 
     fun paymentStarted(totalCentimes: Long, dueCentimes: Long = totalCentimes) {

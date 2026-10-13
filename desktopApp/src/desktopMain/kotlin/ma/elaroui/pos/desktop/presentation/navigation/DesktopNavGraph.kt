@@ -81,6 +81,7 @@ import ma.elaroui.pos.shared.display.CustomerDisplayController
 import ma.elaroui.pos.shared.display.VfdTransport
 import ma.elaroui.pos.shared.domain.OrderLine
 import ma.elaroui.pos.shared.rules.OrderCalculationRules
+import ma.elaroui.pos.shared.rules.OrderTotals
 import ma.elaroui.pos.shared.Clock
 import ma.elaroui.pos.shared.EpochMilliseconds
 import ma.elaroui.pos.shared.rules.MoneyRules
@@ -161,8 +162,8 @@ class DesktopNavState(
     var language by mutableStateOf(DesktopLanguage.from(runBlocking { db.settings.get("selected_language") }))
     val strings get() = DesktopStrings(language)
 
-    fun getCartTotalCentimes(): Long {
-        if (cart.isEmpty()) return 0L
+    fun getCartTotals(): OrderTotals? {
+        if (cart.isEmpty()) return null
         val lines = cart.mapNotNull { (productId, qty) ->
             if (qty <= 0) return@mapNotNull null
             val product = checkoutProducts.firstOrNull { it.id == productId } ?: return@mapNotNull null
@@ -174,16 +175,21 @@ class DesktopNavState(
                 taxRateBasisPoints = product.taxRateBasisPoints
             )
         }
-        if (lines.isEmpty()) return 0L
-        return OrderCalculationRules.calculate(lines, discountBasisPoints, itemDiscountsBasisPoints.toMap()).totalCentimes
+        if (lines.isEmpty()) return null
+        return OrderCalculationRules.calculate(lines, discountBasisPoints, itemDiscountsBasisPoints.toMap())
     }
 
+    fun getCartTotalCentimes(): Long = getCartTotals()?.totalCentimes ?: 0L
+
     fun syncCustomerDisplayCart() {
-        val total = getCartTotalCentimes()
-        if (cart.isEmpty() || total <= 0L) {
+        val totals = getCartTotals()
+        if (cart.isEmpty() || totals == null || totals.totalCentimes <= 0L) {
             customerDisplayController.showIdle()
         } else {
-            customerDisplayController.updateCart(total)
+            customerDisplayController.updateCart(
+                subtotalCentimes = totals.subtotalCentimes,
+                dueCentimes = totals.totalCentimes
+            )
         }
     }
 
@@ -655,7 +661,10 @@ class DesktopNavState(
             discountBasisPoints = 0
             if (proceedToPayment) {
                 clearMessage()
-                customerDisplayController.paymentStarted(created.totalCentimes)
+                customerDisplayController.paymentStarted(
+                    totalCentimes = created.subtotalCentimes,
+                    dueCentimes = created.totalCentimes
+                )
             } else {
                 showSuccess(strings.text("Vente mise en attente", "Sale held", "تم تعليق البيع"))
                 customerDisplayController.showIdle()
@@ -1607,7 +1616,10 @@ private fun DesktopShell(
                 DesktopScreenRoute.PAYMENT -> {
                     state.pendingOrder?.let { order ->
                         LaunchedEffect(order.id) {
-                            state.customerDisplayController.paymentStarted(order.totalCentimes)
+                            state.customerDisplayController.paymentStarted(
+                                totalCentimes = order.subtotalCentimes,
+                                dueCentimes = order.totalCentimes
+                            )
                         }
                         PaymentScreen(
                             order = order,
@@ -1634,14 +1646,20 @@ private fun DesktopShell(
                                 if (received != null && received > 0L) {
                                     state.customerDisplayController.cashReceived(received, order.totalCentimes)
                                 } else {
-                                    state.customerDisplayController.paymentStarted(order.totalCentimes)
+                                    state.customerDisplayController.paymentStarted(
+                                        totalCentimes = order.subtotalCentimes,
+                                        dueCentimes = order.totalCentimes
+                                    )
                                 }
                             },
                             onPaymentMethodChanged = { method ->
                                 if (method == PaymentMethod.CARD) {
                                     state.customerDisplayController.nonCashPaymentSelected("CARTE / TPE", order.totalCentimes)
                                 } else {
-                                    state.customerDisplayController.paymentStarted(order.totalCentimes)
+                                    state.customerDisplayController.paymentStarted(
+                                        totalCentimes = order.subtotalCentimes,
+                                        dueCentimes = order.totalCentimes
+                                    )
                                 }
                             },
                             message = state.message,

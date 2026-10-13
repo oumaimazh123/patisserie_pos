@@ -1,3 +1,7 @@
+> **HISTORICAL DOCUMENT — NOT A DESCRIPTION OF THE CURRENT APPLICATION.**
+> Point-in-time Ubuntu acceptance report (2026-08-30, package 1.0.2). The current version is 1.2.9 (see `gradle.properties`).
+> For current behaviour read [`docs/context/00_index.md`](../context/00_index.md).
+
 # Ubuntu 24.04 Production Acceptance Report
 
 Date: 2026-08-30  

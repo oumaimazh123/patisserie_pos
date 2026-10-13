@@ -1,82 +1,81 @@
-# 01. Project Overview & Scope Definition
+# 01. Project Overview & Scope
 
-## 1. Objective & Vision
-The **Café & Restaurant POS (Minimal V1)** is a high-performance, offline-first Point of Sale application tailored specifically for cafés, restaurants, fast food, and snack outlets in Morocco (and adaptable globally).
+## 1. What the product is
 
-The primary goal of V1 is to deliver a streamlined, resilient system focused strictly on core daily operations:
-- Taking and customizing orders with an ergonomic 3-touch entry limit.
-- Managing dining areas and table occupancy (Dine-in) or quick-service orders (Takeaway / Counter).
-- Receiving and processing local payments (Cash, TPE/Card, Carnet Client, QR Pay).
-- Managing daily register opening and closing sessions with expected cash verification.
-- Managing categories, products, prices, and cashier accounts.
-- Viewing basic daily sales reports, order history, and register session summaries.
+**PATISSERIE_POS** is an offline-first point-of-sale application for pastry shops, bakeries and similar
+counter-service businesses in Morocco. It runs as a Compose Multiplatform **desktop** application on
+Windows 10/11 (primary target, MSI/EXE) and Linux (DEB), uses a local SQLite database, prints ESC/POS
+receipts, drives a serial customer pole display (VFD) and reads USB barcode scanners (keyboard wedge).
 
----
+Identity constants (`desktopApp/src/desktopMain/kotlin/ma/elaroui/pos/desktop/DesktopBuildInfo.kt`):
+`APPLICATION_NAME = PATISSERIE_POS`, `APPLICATION_ID = ma.elaroui.generalpos`,
+`PRODUCT_ID = GENERAL_POS_V1` (licence product id), `LINUX_PACKAGE_NAME = patisserie-pos`,
+`WINDOWS_UPGRADE_UUID = 46788696-3912-4d20-9f7d-220b62935d31`.
 
-## 2. V1 Scope Boundaries
+> The application id and licence product id still say `generalpos` / `GENERAL_POS_V1` for compatibility
+> with licences and installations created under the former "General POS" name. Do not rename these
+> without a migration plan.
 
-### Explicitly INCLUDED in V1
-- **100% Offline Operation:** Runs on local Room database. Zero cloud dependencies.
-- **First Installation Wizard:** Initial restaurant setup, currency selection, tax defaults, and Owner PIN creation.
-- **Role-Based Access Control:** Strict division between Owner and Cashier roles.
-- **Category & Product Management:** Product catalog, pricing, availability toggling, category ordering, dual TVA tax configuration.
-- **Dining Area & Table Management:** Floor plan setup (Terrace, Ground Floor, First Floor, etc.), bulk table creation, status tracking (`AVAILABLE`, `OCCUPIED`).
-- **Register Sessions:** Opening cash declaration, sales tracking, closing cash count, variance calculation.
-- **Order Processing:** Dine-in, Takeaway, Counter orders.
-- **Payments:** Cash (with fast exact-change buttons), Card (TPE), Carnet Client, QR Pay.
-- **Order Cancellation:** Pre-payment item/order removal with mandatory reason and Owner PIN approval.
-- **Thermal Receipt Printing (80mm):** Local receipt rendering including fiscal IDs (ICE, IF, Patente) and dual-language header.
-- **Bilingual & i18n Support:** French, Arabic (Tajawal font rendering), and English.
-- **Local Data Management:** Local database backup and restore.
+## 2. Repository modules
 
-### Explicitly EXCLUDED from V1
-To keep V1 lightweight and rock-solid, the following features are strictly out of scope:
-- Inventory & stock tracking
-- Suppliers and purchasing
-- Customer accounts and loyalty points program
-- Table reservations & booking management
-- Delivery dispatching and driver tracking
-- Kitchen Display System (KDS) / Kitchen printers integration
-- Online ordering & cloud sync
-- Multi-restaurant / multi-branch central management
-- Split bills & table merging
-- Advanced accounting and P&L statements
-- Employee shift attendance / payroll
-- Automatic cloud backups or subscription billing
+| Module | Role | Notes |
+| :--- | :--- | :--- |
+| `:sharedLogic` | Domain models, business rules, use cases, VFD formatting/protocol drivers | KMP, target `jvm("desktop")`, JVM toolchain 17. No UI, no JDBC. |
+| `:desktopApp` | The shipped application: UI, SQLite persistence, printing, licensing, packaging | Compose Desktop, JVM toolchain 17. |
+| `:app` | Old Android/Room implementation | Own Room schema (v9), own copy of domain logic (`Step3…Step8UseCases.kt`, `MonetaryUtils.kt`) and a `SharedBusinessAdapter.kt`. **Not shipped; do not assume it mirrors desktop behaviour.** |
 
----
+## 3. Feature status (verified against code)
 
-## 3. Roles & Permissions Matrix
+| Feature | Status | Where / notes |
+| :--- | :---: | :--- |
+| First-run setup wizard (6 steps) | Implemented | `presentation/setup/SetupScreen.kt`; see 04 §1 for what is actually persisted |
+| PIN login, owner/cashier roles, route guards | Implemented | `DesktopNavGraph.kt` (`isOwnerRoute`, `login`) |
+| Counter sale: cart, per-item and global % discount, inclusive VAT | Implemented | `OrderRules.kt`, `PosUseCases.kt` (`CreateOrder`) |
+| Hold / resume sales ("active orders") | Implemented | `ActiveOrdersScreen.kt`, `DesktopNavState.holdOrder/resumeOrder` |
+| Payment: **cash** (change) and **card** (manual TPE confirmation) | Implemented | `PaymentScreen.kt`, `PaymentRules.kt` |
+| Payment: Carnet client / Mobile-QR | **Not implemented in UI** | Enum values exist (`PaymentMethod`) and `PaymentRules` accepts them, but `PaymentScreen.kt` only offers CASH and CARD. No customer ledger exists. |
+| Preorders (customer, pickup date, deposit, preparation status) | **Partial** | DB columns, `PreorderRules.kt` and `CreateOrder` validation exist; the desktop POS screen never creates a `PREORDER` order and `CompletePayment` ignores deposits. See 04 §7 and file 10. |
+| Dine-in tables / dining areas | Partial (legacy) | Table/area CRUD and optional table on dine-in orders exist; new sales created by the POS screen are always `COUNTER` (`saveDraft`). |
+| Register sessions, cash in/out, closing with count, closing report | Implemented | `PosUseCases.kt`, `RegisterRules.kt`, `SessionClosingReportRules.kt` |
+| Owner PIN approval for cash withdrawals | **Not implemented** | Only a localized label exists (`DesktopLocalization.kt: configureApprovalPin`). |
+| Order cancellation with reason (+ optional cancellation PIN for cashiers) | Implemented | `WindowsPosDatabase.cancelOrder` |
+| Catalogue: categories (up to 4 levels via CSV), products, images, SKU/barcode | Implemented | `CategoryManagementScreen.kt`, `ProductManagementScreen.kt`, `importing/CsvImports.kt` |
+| Barcode scanner (keyboard wedge) | Implemented | `platform/BarcodeScannerController.kt`, `DesktopNavState.onBarcodeScanned` |
+| **Stock / inventory quantities** | **Not implemented** | Only the boolean `products.available` ("out of stock" toggle). Nothing is decremented on sale. |
+| Receipt printing (80/58 mm), cash-drawer pulse, preparation ticket | Implemented | `print/*` (Windows: `javax.print`; Linux: CUPS) |
+| VFD customer display (5 protocols, serial) | Implemented (needs hardware validation) | `sharedLogic/.../display/*`, `desktopApp/.../display/*` |
+| Reports: daily sales, analytics by product/category/cashier, session history | Implemented | `DailySalesReportScreen.kt`, `WindowsPosDatabase.salesSummary/retailSalesAnalytics/salesEvolution` |
+| Backup (ZIP) / staged restore, pre-migration auto-backup | Implemented | `backup/DesktopBackupService.kt`, `WindowsPosDatabase.kt` |
+| Selective data deletion + factory reset (admin password or owner PIN) | Implemented | `DataManagementScreen.kt`, `WindowsPosDatabase.delete*`. **No automatic safety backup is taken** (file 10, KI-12). |
+| Offline licence: 7-day trial + signed licence | Implemented | `license/*` — ECDSA P-256 (not Ed25519), see 07 |
+| Languages: French, Arabic (RTL), English | Implemented | `DesktopLocalization.kt` |
+| Cloud sync, multi-store, loyalty, purchasing, delivery-app integrations | **Not implemented / out of scope** | — |
 
-The system enforces strict Role-Based Access Control (RBAC):
+## 4. Roles & permissions (as enforced)
 
-| Capability / Feature | Owner | Cashier | Notes |
+Enforcement is **route-level** in `DesktopNavState.navigateTo` using `isOwnerRoute(route)`; there is
+no per-action permission check in the desktop app. (`PermissionRules` / `Permission` in
+`sharedLogic/.../rules/PermissionAndValidationRules.kt` exist but are **not used** by `:desktopApp`.)
+
+| Capability | OWNER | CASHIER | Enforcement |
 | :--- | :---: | :---: | :--- |
-| First Installation & Restaurant Setup | ✅ | ❌ | Setup screen hidden post-setup |
-| Configure Restaurant Info, ICE/IF/Patente | ✅ | ❌ | Owner settings only |
-| Create / Edit / Delete Products & Categories | ✅ | ❌ | Cashiers cannot alter prices |
-| Create / Configure / Disable Tables & Areas | ✅ | ❌ | Floor plan configuration |
-| Create & Manage Cashier Accounts / Reset PINs | ✅ | ❌ | Cashier credentials management |
-| View Global Dashboard & All Historical Sales | ✅ | ❌ | Full sales reporting |
-| View Register Sessions (All Cashiers) | ✅ | ❌ | Full register audit |
-| Back Up and Restore Database | ✅ | ❌ | Local file export/import |
-| Open & Close Cash Register Session | ✅* | ✅ | *Owner uses Cashier profile to sell |
-| Take Orders (Dine-in, Takeaway, Counter) | ✅* | ✅ | Primary Cashier workflow |
-| Process Payments (Cash, Card, Carnet) | ✅* | ✅ | Primary Cashier workflow |
-| Print Receipts | ✅* | ✅ | Primary Cashier workflow |
-| Cancel Order before payment | Approved | Requested | Requires Owner PIN prompt |
-| Mark completed order as Refunded | ✅ | ❌ | Owner audit action with reason |
+| POS sale, hold/resume, payment, receipt preview/print | ✅ | ✅ | Non-owner routes |
+| Open / close own register session, cash in/out | ✅ | ✅ | Non-owner routes; `RecordCashMovement` requires `session.cashierId == userId` |
+| Cancel an open order | ✅ (no PIN) | ✅ (needs cancellation PIN **if one is configured**) | `WindowsPosDatabase.cancelOrder` |
+| Dashboard, products, categories, tables, cashiers | ✅ | ❌ | `isOwnerRoute` |
+| Reports, completed sales, sale detail, register history | ✅ | ❌ | `isOwnerRoute` |
+| Settings, printers, customer display, backup/restore, data management, licence | ✅ | ❌ | `isOwnerRoute` (includes `LICENSE_GATE`) |
 
----
+Because the guard is only on navigation, any new **action** reachable from a non-owner screen must
+re-check `currentUser.role` itself.
 
-## 4. Market & Fiscal Context (Morocco)
+## 5. Market & fiscal context
 
-- **Currency:** Moroccan Dirham (`DH` / `MAD`).
-- **Fiscal Identifiers on Receipts:** Identifiant Commun de l'Entreprise (`ICE`), Identifiant Fiscal (`IF`), and `Patente`.
-- **Tax Tiering (TVA):**
-  - **10% TVA:** Catering, food items, hot beverages (coffee, tea).
-  - **20% TVA:** Commercial bottled goods, specific services, standard commercial items.
-- **Language / Script Support:**
-  - French (Primary business script)
-  - Arabic (Tajawal font, native right-to-left layout alignment where applicable)
-  - English (Optional UI language)
+- Currency MAD (`DH`), stored as centimes (`1 DH = 100`).
+- Prices are **VAT-inclusive**; VAT is extracted per line (see 04 §3). The CSV importer accepts only
+  `0`, `10`, `20` % (`0`, `1000`, `2000` basis points); product CRUD accepts any `0..10000` bp
+  (`ProductValidationRules`).
+- Receipt header fields come from `settings`: `establishment_name`, `establishment_specialty`,
+  `restaurant_address`, `restaurant_phone`, `seller_ice`, `seller_tax_id` (IF), `seller_patente`,
+  `seller_commercial_register` (RC), `wifi_name`, `wifi_code`, `restaurant_logo_uri`,
+  `print_establishment_name` (`DesktopNavGraph.kt`, `getCompany`, ~line 2430).

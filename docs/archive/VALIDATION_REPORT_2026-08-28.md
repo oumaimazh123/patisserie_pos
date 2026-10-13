@@ -1,3 +1,7 @@
+> **HISTORICAL DOCUMENT — NOT A DESCRIPTION OF THE CURRENT APPLICATION.**
+> Point-in-time validation evidence (2026-08-28, pre-1.2.x, product then called POS_CR / CafeRestaurantPOS). Test counts and paths are no longer accurate.
+> For current behaviour read [`docs/context/00_index.md`](../context/00_index.md).
+
 # POS_CR Android and Windows validation — 2026-08-28
 
 ## Environment

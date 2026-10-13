@@ -1,3 +1,7 @@
+> **HISTORICAL DOCUMENT — NOT A DESCRIPTION OF THE CURRENT APPLICATION.**
+> Android/Windows parity matrix as of 2026-08-28. Windows rows were later superseded by many changes (e.g. desktop settings, preorders fields, VFD). The Android app (`app/`) is not the product that is shipped.
+> For current behaviour read [`docs/context/00_index.md`](../context/00_index.md).
+
 # Android / Windows Feature Parity Checklist
 
 Status values: **Completed**, **Partial**, **Missing**, **Hardware validation**.
@@ -77,4 +81,4 @@ merely a visible navigation entry.
   omitted `java.sql`, preventing SQLite startup. The rebuilt distributable,
   EXE, and MSI include it and the unpacked runtime now launches successfully.
 - Detailed evidence and the requested seven-column parity matrix are in
-  `docs/VALIDATION_REPORT_2026-08-28.md`.
+  `docs/archive/VALIDATION_REPORT_2026-08-28.md`.

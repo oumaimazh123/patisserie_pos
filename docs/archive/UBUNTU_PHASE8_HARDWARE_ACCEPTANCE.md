@@ -1,3 +1,7 @@
+> **HISTORICAL DOCUMENT — NOT A DESCRIPTION OF THE CURRENT APPLICATION.**
+> Point-in-time Ubuntu hardware acceptance (2026-08-30, version 1.0.2). Its status 'NOT READY FOR CLIENT DELIVERY' refers to that build, not to the current one.
+> For current behaviour read [`docs/context/00_index.md`](../context/00_index.md).
+
 # Phase 8 — Ubuntu Hardware Acceptance and Delivery Readiness
 
 Date: 2026-08-30  

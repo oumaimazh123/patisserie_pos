@@ -1,3 +1,7 @@
+> **HISTORICAL DOCUMENT — NOT A DESCRIPTION OF THE CURRENT APPLICATION.**
+> Original Android-to-Windows migration checklist (checkboxes were never maintained). Kept for project history only; several items (e.g. the 'private licence key outside the app' policy) are still relevant, but check the code before relying on any statement.
+> For current behaviour read [`docs/context/00_index.md`](../context/00_index.md).
+
 # TODO — Android and Windows versions
 
 This document is the implementation checklist for adding a Windows 10/11
@@ -639,7 +643,7 @@ The Windows version is ready only when:
 
 ## Latest parity verification — 2026-08-28
 
-- [x] Added the auditable Android/Windows matrix in `docs/WINDOWS_PARITY_CHECKLIST.md`.
+- [x] Added the auditable Android/Windows matrix in `docs/archive/WINDOWS_PARITY_CHECKLIST.md`.
 - [x] Windows first install seeds 7 categories, 34 Moroccan café products,
       one dining area, and 10 tables; existing databases are not reseeded.
 - [x] Added active-order search/type filtering, move-table and required-reason

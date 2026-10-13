@@ -7,7 +7,7 @@
 - Debian package: `patisserie-pos`
 - Application ID: `ma.elaroui.generalpos`
 - Licence product ID: `GENERAL_POS_V1`
-- Current version: `1.0.1`
+- Current version: see `pos.desktop.version` in `gradle.properties` (1.2.9 at the time of writing)
 - Architecture: Ubuntu/Linux `amd64` (`x86_64`) only until ARM64 is separately built and tested.
 
 Change `pos.desktop.version` in the root `gradle.properties` before a release. The value must be a Debian-compatible dotted numeric version such as `1.0.2` or `1.1.0`. It is used by native distribution metadata and exposed in the Settings diagnostic footer.
@@ -37,7 +37,7 @@ dpkg-deb --contents desktopApp/build/compose/binaries/main/deb/*.deb
 ## Install and upgrade
 
 ```bash
-sudo apt install ./desktopApp/build/compose/binaries/main/deb/general-pos_1.0.1_amd64.deb
+sudo apt install ./desktopApp/build/compose/binaries/main/deb/patisserie-pos_<version>_amd64.deb
 ```
 
 If jpackage emits a differently styled filename, pass that filename to `apt` instead. Run the POS normally from Ubuntu Applications; never run it using `sudo`.
@@ -45,12 +45,12 @@ If jpackage emits a differently styled filename, pass that filename to `apt` ins
 Package files contain only program binaries and the bundled Java runtime. Mutable data remains in the user's XDG directories:
 
 ```text
-${XDG_DATA_HOME:-~/.local/share}/general-pos/
-${XDG_CONFIG_HOME:-~/.config}/general-pos/
-${XDG_CACHE_HOME:-~/.cache}/general-pos/
+${XDG_DATA_HOME:-~/.local/share}/patisserie-pos/
+${XDG_CONFIG_HOME:-~/.config}/patisserie-pos/
+${XDG_CACHE_HOME:-~/.cache}/patisserie-pos/
 ```
 
-Installing a newer package therefore preserves the database, images, backups, settings, printer configuration and device-bound licence. Normal `apt remove general-pos` also leaves these user-owned files in place. Reinstalling recovers them. No package script deletes customer data.
+Installing a newer package therefore preserves the database, images, backups, settings, printer configuration and device-bound licence. Normal `apt remove patisserie-pos` also leaves these user-owned files in place. Reinstalling recovers them. No package script deletes customer data.
 
 Downgrades are unsupported once a newer application has migrated the database schema. Restore a compatible backup before intentionally returning to an older version.
 
@@ -83,13 +83,17 @@ The POS itself does not need root. The logged-in POS user must have normal permi
 - [ ] Trigger the printer-connected cash drawer once from an authorized workflow.
 - [ ] Create and validate a backup on local storage and a mounted USB drive.
 - [ ] Restart Ubuntu and verify database, images, settings, licence and printer choices.
-- [ ] Build/install `1.0.2` over `1.0.1`; verify all existing data again.
-- [ ] Run `sudo apt remove general-pos`, reinstall, and verify user data remains.
+- [ ] Build/install the new version over the previous one; verify all existing data again.
+- [ ] Run `sudo apt remove patisserie-pos`, reinstall, and verify user data remains.
 - [ ] Confirm logs are written under the XDG application log directory.
 - [ ] Test CUPS missing, printer offline, read-only USB and insufficient disk space errors.
 
 Do not publish the package until the real printer, drawer, upgrade and reinstall checks pass on a clean Ubuntu machine.
 
-This duplicated product has an independent package, XDG data directory, Android
-application ID and licence product ID. It does not overwrite the original restaurant
-POS installation or accept licences issued for that product.
+> **Note on identifiers.** The Debian package is `patisserie-pos` and user data lives in
+> `patisserie-pos` XDG directories (`LINUX_DIRECTORY_NAME`), while the application id
+> (`ma.elaroui.generalpos`) and licence product id (`GENERAL_POS_V1`) are inherited from the former
+> "General POS" product (see `desktopApp/.../DesktopBuildInfo.kt`). A `general-pos_1.0.1_amd64.deb`
+> left in `vm-deploy/` is obsolete and must not be distributed.
+> Hardware acceptance for this package is **not** recorded for the current version; see
+> `docs/archive/UBUNTU_PHASE8_HARDWARE_ACCEPTANCE.md` for the historical 1.0.2 status.

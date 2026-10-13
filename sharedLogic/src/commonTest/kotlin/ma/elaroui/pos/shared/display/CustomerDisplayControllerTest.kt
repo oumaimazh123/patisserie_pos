@@ -134,12 +134,36 @@ class CustomerDisplayControllerTest {
         controller.updateCart(totalCentimes = 10000L)
         testScheduler.runCurrent()
 
-        // Apply discount -> total = 80.00
-        controller.updateCart(totalCentimes = 8000L)
+        // Apply discount -> total brut = 100.00, à payer = 80.00
+        controller.updateCart(subtotalCentimes = 10000L, dueCentimes = 8000L)
         testScheduler.runCurrent()
 
         val lastSent = transport.sentTextHistory.last()
-        assertTrue(lastSent.contains("80.00"))
+        assertTrue(lastSent.contains("100.00"), "Line 1 should contain gross total 100.00")
+        assertTrue(lastSent.contains("80.00"), "Line 2 should contain due amount after discount 80.00")
+        val lines = VfdMessageFormatter.format(controller.state.value, testConfig)
+        assertTrue(lines.line1.contains("TOTAL") && lines.line1.contains("100.00"))
+        assertTrue(lines.line2.contains("A PAYER") && lines.line2.contains("80.00"))
+    }
+
+    @Test
+    fun testPaymentStartedWithDiscountShowsGrossAndNet() = runTest {
+        val transport = MockVfdTransport()
+        val controller = CustomerDisplayController(
+            initialConfig = testConfig,
+            transport = transport,
+            scope = this
+        )
+
+        controller.paymentStarted(totalCentimes = 12000L, dueCentimes = 10000L)
+        testScheduler.runCurrent()
+
+        val lastSent = transport.sentTextHistory.last()
+        assertTrue(lastSent.contains("120.00"), "Line 1 should contain gross total")
+        assertTrue(lastSent.contains("100.00"), "Line 2 should contain due after discount")
+        val lines = VfdMessageFormatter.format(controller.state.value, testConfig)
+        assertTrue(lines.line1.startsWith("TOTAL") && lines.line1.endsWith("120.00"))
+        assertTrue(lines.line2.startsWith("A PAYER") && lines.line2.endsWith("100.00"))
     }
 
     @Test

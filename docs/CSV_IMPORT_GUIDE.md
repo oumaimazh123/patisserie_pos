@@ -1,76 +1,52 @@
-# PATISSERIE_POS CSV import
+# PATISSERIE_POS — Catalogue CSV import
 
-CSV import is offline. Files must be UTF-8 and may use either semicolons or commas. For French decimal values, semicolons are recommended.
+Verified against `desktopApp/src/desktopMain/kotlin/ma/elaroui/pos/desktop/importing/CsvImports.kt` and
+`DesktopNavState.executeCatalogImport` (`DesktopNavGraph.kt`). The importer is available to the **owner**
+from the product and category management screens (dialog `CatalogImportDialog.kt`).
 
-## Import order
+> The previous version of this guide described `name;category;price;tva;…` files. That format is **not**
+> supported. Only the 16-column catalogue format below is accepted.
 
-1. Sign in as the owner.
-2. Open **Management → Categories** and choose **Import CSV**.
-3. Select the category CSV and review the import summary.
-4. Open **Management → Products** and choose **Import CSV**.
-5. Select the product CSV and review imported, skipped, and failed rows.
+## File rules
 
-Product import only accepts categories that already exist and are active, so categories must be imported first.
+- UTF-8 (a BOM is stripped), extension `.csv`.
+- Delimiter is **auto-detected from the header line**: `;` if it contains more semicolons than commas,
+  otherwise `,`. Standard CSV quoting (`"…"`, `""`) is supported; blank rows are ignored.
+- The header row must contain all 16 columns (case-insensitive; `_` and `-` are treated like spaces):
 
-## Category format
+| # | Column | Required | Notes |
+| :-: | :--- | :-: | :--- |
+| 1 | `Product ID` | **yes** | Stored as the product **SKU**. Must be unique within the file (case-insensitive). If a product with this SKU already exists it is **updated** (see below). |
+| 2 | `Main Category` | **yes** | Level-1 category (created if missing) |
+| 3 | `Main Category Image` | no | Path (absolute, or relative to the CSV file) or `http(s)` URL |
+| 4–9 | `Sub-Category 1`, `…Image`, `Sub-Category 2`, `…Image`, `Sub-Category 3`, `…Image` | no | Up to 3 sub-levels. **No gaps**: Sub-Category 2 requires Sub-Category 1, etc. |
+| 10 | `Product Name (French)` | **yes** | Product name |
+| 11 | `Product Name (Arabic)` | no | `name_arabic` |
+| 12 | `Product Image` | no | Path or URL |
+| 13 | `Unit / Packaging` | no | e.g. `Pièce`, `Kg` |
+| 14 | `Price (MAD)` | **yes** | Single fixed positive price in dirhams (`6.50` or `6,50`); ranges (`10-12`, `10 à 12`) are rejected. Converted to centimes. |
+| 15 | `TVA` | **yes** | Exactly `0`, `10`, `20` (optionally with `%`) → 0 / 1000 / 2000 basis points |
+| 16 | `Description` | no | |
 
-```csv
-name;display_order;active
-Clothing;1;true
-Accessories;2;true
-```
+An official sample can be generated with `CsvImports.generateOfficialTemplate()` (Moroccan bakery examples).
 
-| Column | Required | Format |
-|---|---|---|
-| `name` | Yes | Unique category name |
-| `display_order` | No | Whole number, starting at 0 or 1 |
-| `active` | No | `true/false`, `1/0`, `yes/no`, or `oui/non`; default is `true` |
+## Processing
 
-French headers `nom`, `ordre`, and `actif` are also accepted.
+1. **Analysis (preview)**: every row is validated; errors (missing mandatory field, duplicate Product ID,
+   level gap, invalid price or TVA) make `canImport = false`; missing image files are **warnings** only.
+   The preview shows the category tree, counts by level, TVA breakdown and images found/missing.
+2. **Import** (only when the analysis has no errors and at least one valid row): for each row the category
+   path is resolved/created, images are copied into the managed `data/images` folder, then the product is
+   created — or, when a product with the same SKU exists, **overwritten** (category, name, price, tax;
+   `active` and `available` are set back to `true`; Arabic name/unit/description/image are kept when the CSV
+   cell is empty).
+3. Rows are applied **one by one, not in a single transaction**: a failure on one row is reported and the
+   import continues; rows already applied stay applied.
 
-## Product format
+## Known caveats (see `docs/context/10_known_issues_and_technical_debt.md`)
 
-```csv
-name;category;price;tva;available;active;sku;barcode;image
-Cotton T-shirt;Clothing;149,90;20;true;true;TSHIRT-BLK-M;6110000000012;images/tshirt-black.jpg
-USB-C cable;Accessories;79,00;20;true;true;USB-C-1M;6110000000013;
-```
-
-| Column | Required | Format |
-|---|---|---|
-| `name` | Yes | Product name; duplicate name in the same category is skipped |
-| `category` | Yes | Exact name of an existing active category |
-| `price` | Yes | Positive amount such as `18,50` or `18.50`, in MAD—not centimes |
-| `tva` | No | Percentage such as `20` or `20%`; default is `10` |
-| `available` | No | Boolean; default is `true` |
-| `active` | No | Boolean; default is `true` |
-| `sku` | No | Unique internal reference |
-| `barcode` | No | Unique EAN/UPC/scanner value; keep it as text in spreadsheet software |
-| `image` | No | Absolute image path or a path relative to the product CSV |
-
-Accepted image formats are PNG, JPG/JPEG, and WebP. Images are validated and copied into PATISSERIE_POS managed storage, so the original import folder can be removed after a successful import and backup.
-
-## Easy bulk image upload
-
-Keep the CSV and its images together:
-
-```text
-patisserie-pos-import/
-├── categories.csv
-├── products.csv
-└── images/
-    ├── croissant.jpg
-    └── eclair-chocolat.webp
-```
-
-Enter `images/croissant.jpg` in the product row's `image` column. PATISSERIE_POS resolves it relative to `products.csv`, validates it, copies it to the application data folder, and links it to the imported product automatically.
-
-For one product, use **Management → Products → Add/Edit → Add image**. This opens the native Ubuntu file picker and shows a preview before saving.
-
-## Spreadsheet notes
-
-- Export as **CSV UTF-8**.
-- Preserve barcodes as text so leading zeroes are not removed and scientific notation is not used.
-- Quote fields containing the selected delimiter or quotation marks.
-- A malformed row does not cancel valid rows; the summary lists failures by line number.
-- Existing products are not overwritten by CSV import.
+- KI-06: the price is parsed through `Double` (`toDoubleOrNull`) and multiplied by 100.0; verify unusual
+  values after import.
+- KI-16: existing products with the same SKU are silently overwritten and re-activated; back up first.
+- The category/product uniqueness rules of the catalogue still apply (duplicate name in the same category,
+  duplicate barcode); the CSV has no barcode column — set barcodes in Product management afterwards.

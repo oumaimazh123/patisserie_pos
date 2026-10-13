@@ -58,6 +58,15 @@ class VfdFormattingAndProtocolTest {
         assertTrue(formatted.line2.endsWith("125.50"))
     }
 
+    // Test 31b: Discount shows subtotal on line 1 and due after discount on line 2
+    @Test
+    fun testDiscountFormattingGrossAndNetDue() {
+        val state = CustomerDisplayState.DuringSale(totalCentimes = 15000L, dueCentimes = 12000L)
+        val formatted = VfdMessageFormatter.format(state, defaultConfig)
+        assertEquals("TOTAL         150.00", formatted.line1)
+        assertEquals("A PAYER       120.00", formatted.line2)
+    }
+
     // Test 32: Unsupported characters safely replaced
     @Test
     fun testUnsupportedCharactersSafelyHandled() {
